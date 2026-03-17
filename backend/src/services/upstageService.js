@@ -45,10 +45,6 @@ async function runUpstageDocumentParse({ file, fileMetadata, config }) {
     form.append("output_formats", format);
   });
 
-  if (config.model) {
-    form.append("model", String(config.model));
-  }
-
   if (typeof config.base64Encoding !== "undefined") {
     form.append("base64_encoding", String(config.base64Encoding));
   }
@@ -78,7 +74,6 @@ async function runUpstageDocumentParse({ file, fileMetadata, config }) {
         ocrMode: config.ocrMode || "auto",
         coordinates: Boolean(config.coordinates ?? true),
         outputFormats: getOutputFormats(config),
-        model: config.model || "",
         base64Encoding: Boolean(config.base64Encoding ?? false),
         timeoutMs,
         retryCount,
@@ -119,45 +114,7 @@ async function checkEndpoints(payload) {
   };
 }
 
-async function registerLicense(payload) {
-  const url = payload.url;
-
-  if (!url) {
-    throw new AppError("라이선스 등록 URL이 필요합니다.", 400);
-  }
-
-  await validateTargetUrl(url);
-
-  const body = parseJsonField(payload.bodyJson, {});
-  const licenseKey = payload.licenseKey || payload.license_key || "";
-  const response = await requestJson({
-    method: "POST",
-    url,
-    headers: {
-      "Content-Type": "application/json",
-      ...parseJsonField(payload.headersJson, {}),
-    },
-    data: {
-      ...body,
-      ...(licenseKey
-        ? {
-            licenseKey,
-            license_key: licenseKey,
-          }
-        : {}),
-    },
-    timeoutMs: Number(payload.timeoutMs || 30000),
-    retryCount: Number(payload.retryCount || 1),
-  });
-
-  return {
-    statusCode: response.status,
-    raw: response.data,
-  };
-}
-
 module.exports = {
   runUpstageDocumentParse,
   checkEndpoints,
-  registerLicense,
 };

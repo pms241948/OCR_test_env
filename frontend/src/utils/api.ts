@@ -71,18 +71,6 @@ export async function checkUpstageEndpointsApi(payload: {
   return unwrap(response);
 }
 
-export async function registerUpstageLicenseApi(payload: {
-  url: string;
-  licenseKey: string;
-  headersJson?: string;
-  bodyJson?: string;
-  timeoutMs?: number;
-  retryCount?: number;
-}): Promise<{ statusCode: number; raw: unknown }> {
-  const response = await api.post("/upstage/register-license", payload);
-  return unwrap(response);
-}
-
 export async function fetchHistoryApi(): Promise<HistoryRecord[]> {
   const response = await api.get("/history");
   return unwrap(response);

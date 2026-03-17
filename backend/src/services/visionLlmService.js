@@ -11,6 +11,7 @@ const {
   createTempDir,
   fileToDataUrl,
   isPdfFile,
+  normalizePageRois,
   normalizeRoi,
   pageRangeFromConfig,
 } = require("../utils/file");
@@ -49,19 +50,46 @@ async function cropImage(inputPath, roi, outputPath) {
   };
 }
 
+function createEffectivePageRois(pages, pageRois, fallbackRoi) {
+  return pages.reduce((accumulator, page) => {
+    const pageSpecificRoi = pageRois[String(page)] || (fallbackRoi ? { ...fallbackRoi, page } : null);
+    if (!pageSpecificRoi) {
+      return accumulator;
+    }
+
+    accumulator[String(page)] = {
+      ...pageSpecificRoi,
+      page,
+    };
+    return accumulator;
+  }, {});
+}
+
+function getPageCropRoi(range, page) {
+  if (range.rangeMode === "page_and_roi") {
+    return range.pageRois?.[String(page)] || range.roi || null;
+  }
+
+  return range.roi;
+}
+
 function resolveRange(config, fileMetadata) {
   const rangeMode = config.rangeMode || "full_document";
   const roi = config.roi ? normalizeRoi(config.roi) : null;
+  const pageRois = normalizePageRois(config.pageRois);
 
   if (!["full_document", "page_range", "roi", "page_and_roi"].includes(rangeMode)) {
     throw new AppError("지원하지 않는 Vision 범위 모드입니다.", 400);
   }
 
   if (!isPdfFile(fileMetadata)) {
+    const firstPageRoi =
+      rangeMode === "page_and_roi" ? pageRois["1"] || (roi ? { ...roi, page: 1 } : null) : null;
     return {
       rangeMode,
       pages: [1],
-      roi: rangeMode === "roi" || rangeMode === "page_and_roi" ? roi : null,
+      roi: rangeMode === "roi" ? roi : firstPageRoi,
+      pageRois: firstPageRoi ? { "1": firstPageRoi } : null,
     };
   }
 
@@ -70,6 +98,7 @@ function resolveRange(config, fileMetadata) {
       rangeMode,
       pages: Array.from({ length: fileMetadata.pageCount || 1 }, (_, index) => index + 1),
       roi: null,
+      pageRois: null,
     };
   }
 
@@ -78,6 +107,7 @@ function resolveRange(config, fileMetadata) {
       rangeMode,
       pages: pageRangeFromConfig(config, fileMetadata.pageCount),
       roi: null,
+      pageRois: null,
     };
   }
 
@@ -86,14 +116,18 @@ function resolveRange(config, fileMetadata) {
     return {
       rangeMode,
       pages: [targetPage],
-      roi,
+      roi: roi ? { ...roi, page: targetPage } : null,
+      pageRois: null,
     };
   }
 
+  const pages = pageRangeFromConfig(config, fileMetadata.pageCount);
+  const effectivePageRois = createEffectivePageRois(pages, pageRois, roi);
   return {
     rangeMode,
-    pages: pageRangeFromConfig(config, fileMetadata.pageCount),
+    pages,
     roi,
+    pageRois: Object.keys(effectivePageRois).length ? effectivePageRois : null,
   };
 }
 
@@ -107,9 +141,10 @@ async function prepareImageAssets(file, fileMetadata, config) {
       const rendered = await renderPdfPagesToPng(file.path, range.pages, tempDir);
 
       for (const item of rendered) {
-        if (range.roi) {
+        const pageCropRoi = getPageCropRoi(range, item.page);
+        if (pageCropRoi) {
           const outputPath = path.join(tempDir, `crop-page-${item.page}.png`);
-          const cropped = await cropImage(item.path, range.roi, outputPath);
+          const cropped = await cropImage(item.path, pageCropRoi, outputPath);
           assets.push({
             page: item.page,
             path: cropped.path,
@@ -130,27 +165,30 @@ async function prepareImageAssets(file, fileMetadata, config) {
           });
         }
       }
-    } else if (range.roi) {
-      const outputPath = path.join(tempDir, "crop-image.png");
-      const cropped = await cropImage(file.path, range.roi, outputPath);
-      assets.push({
-        page: 1,
-        path: cropped.path,
-        width: cropped.width,
-        height: cropped.height,
-        mimeType: "image/png",
-        cropped: true,
-      });
     } else {
-      const metadata = await sharp(file.path).metadata();
-      assets.push({
-        page: 1,
-        path: file.path,
-        width: metadata.width || null,
-        height: metadata.height || null,
-        mimeType: file.mimetype,
-        cropped: false,
-      });
+      const imageRoi = getPageCropRoi(range, 1);
+      if (imageRoi) {
+        const outputPath = path.join(tempDir, "crop-image.png");
+        const cropped = await cropImage(file.path, imageRoi, outputPath);
+        assets.push({
+          page: 1,
+          path: cropped.path,
+          width: cropped.width,
+          height: cropped.height,
+          mimeType: "image/png",
+          cropped: true,
+        });
+      } else {
+        const metadata = await sharp(file.path).metadata();
+        assets.push({
+          page: 1,
+          path: file.path,
+          width: metadata.width || null,
+          height: metadata.height || null,
+          mimeType: file.mimetype,
+          cropped: false,
+        });
+      }
     }
 
     return {
@@ -264,6 +302,7 @@ async function runVisionOcr({ file, fileMetadata, config }) {
         mode: prepared.range.rangeMode,
         pages: prepared.range.pages,
         roi: prepared.range.roi,
+        pageRois: prepared.range.pageRois || null,
       },
       assets: prepared.assets.map((item) => ({
         page: item.page,

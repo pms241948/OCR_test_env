@@ -8,6 +8,8 @@ export type Roi = {
   page?: number;
 };
 
+export type PageRoiMap = Record<string, Roi>;
+
 export type FileMeta = {
   fileName: string;
   fileSize: number;
@@ -18,17 +20,19 @@ export type FileMeta = {
   fileHash?: string | null;
 };
 
+export type UploadedDocument = {
+  id: string;
+  file: File;
+  meta: FileMeta;
+};
+
 export type UpstageConfig = {
   url: string;
   endpointsUrl: string;
-  licenseUrl: string;
-  licenseKey: string;
   headersJson: string;
-  licenseBodyJson: string;
   ocrMode: "auto" | "force";
   coordinates: boolean;
   outputFormats: string[];
-  model: string;
   base64Encoding: boolean;
   timeoutMs: number;
   retryCount: number;
@@ -57,6 +61,7 @@ export type VisionConfig = LlmBaseConfig & {
   pageRangeStart: number;
   pageRangeEnd: number;
   roi: Roi;
+  pageRois?: PageRoiMap;
 };
 
 export type PostprocessConfig = LlmBaseConfig;
@@ -114,6 +119,7 @@ export type StageResponse = {
     mode: RangeMode;
     pages: number[];
     roi: Roi | null;
+    pageRois?: PageRoiMap | null;
   };
   elements?: unknown[];
   usage?: unknown;

@@ -11,7 +11,6 @@ const { cleanupUploadedFile, getDocumentMetadata, sha256File } = require("../uti
 const { parseJsonField } = require("../utils/parsing");
 const {
   checkEndpoints,
-  registerLicense,
   runUpstageDocumentParse,
 } = require("../services/upstageService");
 const { runVisionOcr } = require("../services/visionLlmService");
@@ -223,16 +222,6 @@ async function checkUpstageEndpoints(req, res) {
   });
 }
 
-async function registerUpstageLicense(req, res) {
-  const payload = req.body || {};
-  const result = await registerLicense(payload);
-
-  res.json({
-    success: true,
-    data: result,
-  });
-}
-
 async function listHistory(req, res) {
   const limit = Number(req.query.limit || 20);
   const items = listHistoryEntries(limit);
@@ -332,7 +321,6 @@ module.exports = {
   runPostprocess,
   runAll,
   checkUpstageEndpoints,
-  registerUpstageLicense,
   listHistory,
   createHistoryEntry,
   listPresets,

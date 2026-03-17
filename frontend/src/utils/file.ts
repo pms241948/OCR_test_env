@@ -5,22 +5,66 @@ import type { FileMeta } from "./types";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 
+type SupportedFileKind = "pdf" | "image" | null;
+
+function getLowercaseExtension(fileName: string): string {
+  const parts = fileName.toLowerCase().split(".");
+  return parts.length > 1 ? parts[parts.length - 1] : "";
+}
+
+export function getSupportedFileKind(file: Pick<File, "name" | "type">): SupportedFileKind {
+  const mimeType = file.type.toLowerCase();
+  const extension = getLowercaseExtension(file.name);
+
+  if (mimeType === "application/pdf" || extension === "pdf") {
+    return "pdf";
+  }
+
+  if (
+    mimeType === "image/png" ||
+    mimeType === "image/jpeg" ||
+    extension === "png" ||
+    extension === "jpg" ||
+    extension === "jpeg"
+  ) {
+    return "image";
+  }
+
+  return null;
+}
+
+export function getNormalizedMimeType(file: Pick<File, "name" | "type">): string {
+  const kind = getSupportedFileKind(file);
+
+  if (kind === "pdf") {
+    return "application/pdf";
+  }
+
+  if (kind === "image") {
+    const extension = getLowercaseExtension(file.name);
+    return extension === "png" ? "image/png" : "image/jpeg";
+  }
+
+  return file.type;
+}
+
 export async function getLocalFileMeta(file: File): Promise<FileMeta> {
+  const kind = getSupportedFileKind(file);
   const meta: FileMeta = {
     fileName: file.name,
     fileSize: file.size,
-    mimeType: file.type,
+    mimeType: getNormalizedMimeType(file),
     pageCount: 1,
   };
 
-  if (file.type === "application/pdf") {
+  if (kind === "pdf") {
     const buffer = await file.arrayBuffer();
     const pdf = await getDocument({ data: buffer }).promise;
     meta.pageCount = pdf.numPages;
     return meta;
   }
 
-  if (file.type === "image/png" || file.type === "image/jpeg") {
+  if (kind === "image") {
     const dimensions = await getImageDimensions(file);
     meta.width = dimensions.width;
     meta.height = dimensions.height;

@@ -9,7 +9,6 @@ const {
   runPostprocess,
   runAll,
   checkUpstageEndpoints,
-  registerUpstageLicense,
   listHistory,
   createHistoryEntry,
   listPresets,
@@ -26,7 +25,6 @@ apiRouter.post("/ocr/vision-llm", uploadSingle, asyncHandler(runVisionLlm));
 apiRouter.post("/postprocess", asyncHandler(runPostprocess));
 apiRouter.post("/run-all", uploadSingle, asyncHandler(runAll));
 apiRouter.post("/upstage/check-endpoints", asyncHandler(checkUpstageEndpoints));
-apiRouter.post("/upstage/register-license", asyncHandler(registerUpstageLicense));
 apiRouter.get("/history", asyncHandler(listHistory));
 apiRouter.post("/history", asyncHandler(createHistoryEntry));
 apiRouter.get("/presets", asyncHandler(listPresets));

@@ -127,6 +127,30 @@ function normalizeRoi(roi) {
   return normalized;
 }
 
+function normalizePageRois(pageRois) {
+  if (!pageRois || typeof pageRois !== "object") {
+    return {};
+  }
+
+  return Object.entries(pageRois).reduce((accumulator, [pageKey, roi]) => {
+    const normalizedPage = Number(pageKey);
+    if (!Number.isInteger(normalizedPage) || normalizedPage < 1) {
+      return accumulator;
+    }
+
+    const normalizedRoi = normalizeRoi(roi);
+    if (!normalizedRoi) {
+      return accumulator;
+    }
+
+    accumulator[String(normalizedPage)] = {
+      ...normalizedRoi,
+      page: normalizedPage,
+    };
+    return accumulator;
+  }, {});
+}
+
 function pageRangeFromConfig(config, totalPages = 1) {
   const start = Math.max(1, Number(config.pageRangeStart || 1));
   const end = Math.min(totalPages || 1, Number(config.pageRangeEnd || totalPages || 1));
@@ -147,6 +171,7 @@ module.exports = {
   isImageFile,
   isPdfFile,
   normalizeRoi,
+  normalizePageRois,
   pageRangeFromConfig,
   sha256File,
 };

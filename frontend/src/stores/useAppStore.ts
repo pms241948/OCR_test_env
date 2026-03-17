@@ -16,14 +16,10 @@ import type {
 const defaultUpstageConfig: UpstageConfig = {
   url: "",
   endpointsUrl: "",
-  licenseUrl: "",
-  licenseKey: "",
   headersJson: "{}",
-  licenseBodyJson: "{}",
   ocrMode: "auto",
   coordinates: true,
   outputFormats: ["text", "html", "markdown"],
-  model: "",
   base64Encoding: false,
   timeoutMs: 300000,
   retryCount: 1,
@@ -56,6 +52,7 @@ const defaultVisionConfig: VisionConfig = {
     height: 0.8,
     page: 1,
   },
+  pageRois: {},
 };
 
 const defaultPostprocessConfig: PostprocessConfig = {
@@ -160,9 +157,23 @@ export const useAppStore = create<AppStore>()(
       setHistory: (history) => set({ history }),
       applyConfigBundle: (config) =>
         set({
-          upstageConfig: config.upstage,
-          visionConfig: config.vision,
-          postprocessConfig: config.postprocess,
+          upstageConfig: {
+            ...defaultUpstageConfig,
+            ...config.upstage,
+          },
+          visionConfig: {
+            ...defaultVisionConfig,
+            ...config.vision,
+            roi: {
+              ...defaultVisionConfig.roi,
+              ...config.vision.roi,
+            },
+            pageRois: config.vision.pageRois || {},
+          },
+          postprocessConfig: {
+            ...defaultPostprocessConfig,
+            ...config.postprocess,
+          },
         }),
       resetConfigs: () =>
         set({

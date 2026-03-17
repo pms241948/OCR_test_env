@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 
+import { DocumentPreview } from "../components/DocumentPreview";
 import { JsonViewer } from "../components/JsonViewer";
 import { ResultPane } from "../components/ResultPane";
 import { RoiSelector } from "../components/RoiSelector";
@@ -12,23 +13,38 @@ import {
   deletePresetApi,
   fetchHistoryApi,
   fetchPresetsApi,
-  registerUpstageLicenseApi,
   runAllApi,
   runPostprocessApi,
   runUpstageApi,
   runVisionApi,
   updatePresetApi,
 } from "../utils/api";
-import { formatBytes, getLocalFileMeta, isoToLabel, readTextFile } from "../utils/file";
+import {
+  formatBytes,
+  getLocalFileMeta,
+  getSupportedFileKind,
+  isoToLabel,
+  readTextFile,
+} from "../utils/file";
 import { translate, type AppLanguage } from "../utils/i18n";
+import {
+  deleteUploadedDocumentFromLibrary,
+  loadUploadLibrary,
+  saveUploadedDocumentToLibrary,
+  setActiveUploadLibraryDocument,
+  UPLOAD_LIBRARY_LIMIT_ERROR,
+} from "../utils/uploadLibrary";
 import type {
+  FileMeta,
   HistoryRecord,
+  PageRoiMap,
   PresetRecord,
   RangeMode,
   Roi,
   StageKey,
   StageResponse,
   StoredConfigBundle,
+  UploadedDocument,
 } from "../utils/types";
 
 type RunStatus = {
@@ -37,6 +53,8 @@ type RunStatus = {
 };
 
 type RunStatusMap = Record<StageKey, RunStatus>;
+
+const PRESETS_PER_PAGE = 5;
 
 function createInitialRunStatus(): RunStatusMap {
   return {
@@ -145,6 +163,14 @@ function getErrorMessage(error: unknown, language: AppLanguage): string {
   return translate(language, "errors.unknown");
 }
 
+function getUploadLibraryErrorMessage(error: unknown, language: AppLanguage): string {
+  if (error instanceof Error && error.message === UPLOAD_LIBRARY_LIMIT_ERROR) {
+    return translate(language, "alerts.upload_too_large_for_library");
+  }
+
+  return translate(language, "alerts.save_upload_failed");
+}
+
 function resolveUpstageText(result: StageResponse | null): string {
   if (!result) {
     return "";
@@ -224,6 +250,37 @@ function formatHistoryMeta(language: AppLanguage, item: HistoryRecord): string {
   return language === "ko" ? `${runLabel} 실행 · ${dateLabel}` : `${runLabel} at ${dateLabel}`;
 }
 
+function createUploadedDocumentId(file: Pick<File, "name" | "size" | "lastModified">): string {
+  return [file.name, file.size, file.lastModified].join("::");
+}
+
+function clampPage(page: number, pageCount: number): number {
+  if (!Number.isFinite(page)) {
+    return 1;
+  }
+
+  return Math.min(Math.max(Math.trunc(page), 1), Math.max(pageCount, 1));
+}
+
+function sanitizePageRois(pageRois: PageRoiMap | undefined, pageCount: number): PageRoiMap {
+  if (!pageRois) {
+    return {};
+  }
+
+  return Object.entries(pageRois).reduce((accumulator: PageRoiMap, [pageKey, roi]) => {
+    const normalizedPage = Number(pageKey);
+    if (!Number.isInteger(normalizedPage) || normalizedPage < 1 || normalizedPage > Math.max(pageCount, 1)) {
+      return accumulator;
+    }
+
+    accumulator[String(normalizedPage)] = {
+      ...roi,
+      page: normalizedPage,
+    };
+    return accumulator;
+  }, {});
+}
+
 export function DashboardPage() {
   const {
     language,
@@ -248,13 +305,20 @@ export function DashboardPage() {
   } = useAppStore();
 
   const t = (key: string) => translate(language, key);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadedDocuments, setUploadedDocuments] = useState<UploadedDocument[]>([]);
+  const [activeDocumentId, setActiveDocumentId] = useState<string | null>(null);
   const [previewPage, setPreviewPage] = useState(1);
   const [endpointCheckResult, setEndpointCheckResult] = useState<unknown>(null);
-  const [licenseResult, setLicenseResult] = useState<unknown>(null);
   const [presetName, setPresetName] = useState("");
   const [presetDescription, setPresetDescription] = useState("");
+  const [presetPage, setPresetPage] = useState(1);
   const [runStatus, setRunStatus] = useState<RunStatusMap>(createInitialRunStatus());
+  const activeDocument = useMemo(
+    () => uploadedDocuments.find((document) => document.id === activeDocumentId) || null,
+    [activeDocumentId, uploadedDocuments]
+  );
+  const selectedFile = activeDocument?.file || null;
+  const activeFileMeta = activeDocument?.meta || fileMeta;
 
   const currentBundle = useMemo(
     () =>
@@ -265,13 +329,46 @@ export function DashboardPage() {
       }),
     [postprocessConfig, upstageConfig, visionConfig]
   );
+  const totalPresetPages = Math.max(1, Math.ceil(presets.length / PRESETS_PER_PAGE));
+  const visiblePresets = useMemo(() => {
+    const start = (presetPage - 1) * PRESETS_PER_PAGE;
+    return presets.slice(start, start + PRESETS_PER_PAGE);
+  }, [presetPage, presets]);
 
   const roiEnabled =
     visionConfig.rangeMode === "roi" || visionConfig.rangeMode === "page_and_roi";
+  const activePageCount = Math.max(activeFileMeta?.pageCount || 1, 1);
+  const activeVisionRoi = useMemo(() => {
+    if (visionConfig.rangeMode !== "page_and_roi") {
+      return {
+        ...visionConfig.roi,
+        page: clampPage(visionConfig.roi.page || 1, activePageCount),
+      };
+    }
+
+    const pageSpecificRoi = visionConfig.pageRois?.[String(previewPage)];
+    if (pageSpecificRoi) {
+      return pageSpecificRoi;
+    }
+
+    return {
+      ...visionConfig.roi,
+      page: clampPage(previewPage, activePageCount),
+    };
+  }, [activePageCount, previewPage, visionConfig.pageRois, visionConfig.rangeMode, visionConfig.roi]);
 
   useEffect(() => {
     void refreshSidebarData();
+    void restoreUploadedDocuments();
   }, []);
+
+  useEffect(() => {
+    setPresetPage((current) => Math.min(current, totalPresetPages));
+  }, [totalPresetPages]);
+
+  useEffect(() => {
+    setPreviewPage((current) => clampPage(current, activePageCount));
+  }, [activePageCount]);
 
   async function refreshSidebarData() {
     const [historyItems, presetItems] = await Promise.all([
@@ -283,35 +380,199 @@ export function DashboardPage() {
     setPresets(presetItems);
   }
 
+  async function restoreUploadedDocuments() {
+    try {
+      const snapshot = await loadUploadLibrary();
+      setUploadedDocuments(snapshot.documents);
+
+      if (!snapshot.activeDocumentId) {
+        return;
+      }
+
+      const document = snapshot.documents.find((item) => item.id === snapshot.activeDocumentId);
+      if (!document) {
+        return;
+      }
+
+      activateUploadedDocument(document, {
+        persistSelection: false,
+        resetResults: false,
+        visionScopeMode: "clamp",
+      });
+    } catch {
+      alert(t("alerts.restore_uploads_failed"));
+    }
+  }
+
+  function syncVisionScopeWithFileMeta(meta: FileMeta, mode: "reset" | "clamp") {
+    const totalPages = Math.max(meta.pageCount, 1);
+    const nextPageRangeStart =
+      mode === "reset"
+        ? 1
+        : Math.min(Math.max(visionConfig.pageRangeStart || 1, 1), totalPages);
+    const nextPageRangeEnd =
+      mode === "reset"
+        ? meta.pageCount
+        : Math.min(
+            Math.max(visionConfig.pageRangeEnd || nextPageRangeStart, nextPageRangeStart),
+            totalPages
+          );
+    const nextRoiPage =
+      mode === "reset"
+        ? 1
+        : clampPage(visionConfig.roi.page || 1, totalPages);
+    const nextPageRois = mode === "reset" ? {} : sanitizePageRois(visionConfig.pageRois, totalPages);
+
+    updateVisionConfig({
+      pageRangeStart: nextPageRangeStart,
+      pageRangeEnd: nextPageRangeEnd,
+      roi: {
+        ...visionConfig.roi,
+        page: nextRoiPage,
+      },
+      pageRois: nextPageRois,
+    });
+  }
+
+  function updateUploadedDocumentMeta(documentId: string, nextMeta: FileMeta) {
+    setUploadedDocuments((current) =>
+      current.map((document) =>
+        document.id === documentId
+          ? {
+              ...document,
+              meta: {
+                ...document.meta,
+                ...nextMeta,
+              },
+            }
+          : document
+      )
+    );
+  }
+
+  function activateUploadedDocument(
+    document: UploadedDocument,
+    options?: {
+      persistSelection?: boolean;
+      resetResults?: boolean;
+      visionScopeMode?: "reset" | "clamp";
+    }
+  ) {
+    const {
+      persistSelection = true,
+      resetResults: shouldResetResults = true,
+      visionScopeMode = "reset",
+    } = options || {};
+
+    setActiveDocumentId(document.id);
+    setFileMeta(document.meta);
+    if (shouldResetResults) {
+      resetResults();
+      setRunStatus(createInitialRunStatus());
+    }
+    setPreviewPage(1);
+    syncVisionScopeWithFileMeta(document.meta, visionScopeMode);
+
+    if (persistSelection) {
+      void setActiveUploadLibraryDocument(document.id);
+    }
+  }
+
   async function handleFileSelection(file: File | null) {
     if (!file) {
-      setSelectedFile(null);
-      setFileMeta(null);
-      resetResults();
       return;
     }
 
-    if (
-      !["application/pdf", "image/png", "image/jpeg"].includes(file.type) &&
-      !/\.(pdf|png|jpe?g)$/i.test(file.name)
-    ) {
+    if (!getSupportedFileKind(file)) {
       alert(t("alerts.unsupported_file"));
       return;
     }
 
-    const meta = await getLocalFileMeta(file);
-    setSelectedFile(file);
-    setFileMeta(meta);
-    resetResults();
-    setPreviewPage(1);
-    updateVisionConfig({
-      pageRangeStart: 1,
-      pageRangeEnd: meta.pageCount,
-      roi: {
-        ...visionConfig.roi,
-        page: 1,
-      },
+    try {
+      const meta = await getLocalFileMeta(file);
+      const nextDocument = {
+        id: createUploadedDocumentId(file),
+        file,
+        meta,
+      };
+
+      try {
+        const snapshot = await saveUploadedDocumentToLibrary(nextDocument);
+        setUploadedDocuments(snapshot.documents);
+        activateUploadedDocument(nextDocument, {
+          persistSelection: false,
+          resetResults: true,
+          visionScopeMode: "reset",
+        });
+      } catch (storageError) {
+        alert(getUploadLibraryErrorMessage(storageError, language));
+      }
+    } catch (error) {
+      alert(getErrorMessage(error, language));
+    }
+  }
+
+  async function handleFileInputChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] || null;
+    await handleFileSelection(file);
+    event.target.value = "";
+  }
+
+  async function handleSelectUploadedDocument(documentId: string) {
+    if (documentId === activeDocumentId) {
+      return;
+    }
+
+    const document = uploadedDocuments.find((item) => item.id === documentId);
+    if (!document) {
+      return;
+    }
+
+    activateUploadedDocument(document, {
+      persistSelection: false,
+      resetResults: true,
+      visionScopeMode: "reset",
     });
+
+    try {
+      await setActiveUploadLibraryDocument(document.id);
+    } catch {
+      alert(t("alerts.save_upload_failed"));
+    }
+  }
+
+  async function handleDeleteUploadedDocument(documentId: string) {
+    const remainingDocuments = uploadedDocuments.filter((document) => document.id !== documentId);
+    const nextActiveDocument =
+      activeDocumentId === documentId ? remainingDocuments[0] || null : activeDocument;
+
+    setUploadedDocuments(remainingDocuments);
+
+    if (activeDocumentId === documentId) {
+      if (nextActiveDocument) {
+        activateUploadedDocument(nextActiveDocument, {
+          persistSelection: false,
+          resetResults: true,
+          visionScopeMode: "reset",
+        });
+      } else {
+        setActiveDocumentId(null);
+        setFileMeta(null);
+        resetResults();
+        setRunStatus(createInitialRunStatus());
+        setPreviewPage(1);
+      }
+    }
+
+    try {
+      await deleteUploadedDocumentFromLibrary(documentId);
+      if (activeDocumentId === documentId) {
+        await setActiveUploadLibraryDocument(nextActiveDocument?.id || null);
+      }
+    } catch {
+      alert(t("alerts.save_upload_failed"));
+      void restoreUploadedDocuments();
+    }
   }
 
   function markStage(stage: StageKey, next: RunStatus) {
@@ -342,7 +603,19 @@ export function DashboardPage() {
       const response = await runUpstageApi(selectedFile, upstageConfig);
       setStageResult("upstage", response);
       if (response.file) {
-        setFileMeta(response.file);
+        const nextMeta = {
+          ...(activeFileMeta || {
+            fileName: selectedFile.name,
+            fileSize: selectedFile.size,
+            mimeType: selectedFile.type,
+            pageCount: 1,
+          }),
+          ...response.file,
+        };
+        setFileMeta(nextMeta);
+        if (activeDocumentId) {
+          updateUploadedDocumentMeta(activeDocumentId, nextMeta);
+        }
       }
     });
   }
@@ -357,7 +630,19 @@ export function DashboardPage() {
       const response = await runVisionApi(selectedFile, visionConfig);
       setStageResult("vision", response);
       if (response.file) {
-        setFileMeta(response.file);
+        const nextMeta = {
+          ...(activeFileMeta || {
+            fileName: selectedFile.name,
+            fileSize: selectedFile.size,
+            mimeType: selectedFile.type,
+            pageCount: 1,
+          }),
+          ...response.file,
+        };
+        setFileMeta(nextMeta);
+        if (activeDocumentId) {
+          updateUploadedDocumentMeta(activeDocumentId, nextMeta);
+        }
       }
     });
   }
@@ -366,14 +651,14 @@ export function DashboardPage() {
     const upstageResult = results.upstage;
     const visionResult = results.vision;
 
-    if (!fileMeta || !upstageResult || !visionResult) {
+    if (!activeFileMeta || !upstageResult || !visionResult) {
       alert(t("alerts.run_upstage_and_vision_first"));
       return;
     }
 
     await executeStage("postprocess", async () => {
       const response = await runPostprocessApi({
-        file: fileMeta,
+        file: activeFileMeta,
         upstageResult,
         visionResult,
         config: postprocessConfig,
@@ -391,6 +676,17 @@ export function DashboardPage() {
     await executeStage("pipeline", async () => {
       const response = await runAllApi(selectedFile, currentBundle);
       setFileMeta(response.file);
+      if (activeDocumentId) {
+        updateUploadedDocumentMeta(activeDocumentId, {
+          ...(activeFileMeta || {
+            fileName: selectedFile.name,
+            fileSize: selectedFile.size,
+            mimeType: selectedFile.type,
+            pageCount: 1,
+          }),
+          ...response.file,
+        });
+      }
       setStageResult("upstage", response.upstage);
       setStageResult("vision", response.vision);
       setStageResult("postprocess", response.postprocess);
@@ -416,27 +712,6 @@ export function DashboardPage() {
       setEndpointCheckResult(response);
     } catch (error) {
       setEndpointCheckResult({ error: getErrorMessage(error, language) });
-    }
-  }
-
-  async function handleRegisterLicense() {
-    if (!upstageConfig.licenseUrl) {
-      alert(t("alerts.enter_license_url"));
-      return;
-    }
-
-    try {
-      const response = await registerUpstageLicenseApi({
-        url: upstageConfig.licenseUrl,
-        licenseKey: upstageConfig.licenseKey,
-        headersJson: upstageConfig.headersJson,
-        bodyJson: upstageConfig.licenseBodyJson,
-        timeoutMs: upstageConfig.timeoutMs,
-        retryCount: upstageConfig.retryCount,
-      });
-      setLicenseResult(response);
-    } catch (error) {
-      setLicenseResult({ error: getErrorMessage(error, language) });
     }
   }
 
@@ -470,6 +745,7 @@ export function DashboardPage() {
     });
     setPresetName("");
     setPresetDescription("");
+    setPresetPage(1);
     await refreshSidebarData();
   }
 
@@ -479,6 +755,7 @@ export function DashboardPage() {
       description: preset.description,
       config: currentBundle,
     });
+    setPresetPage(1);
     await refreshSidebarData();
   }
 
@@ -492,6 +769,9 @@ export function DashboardPage() {
   }
 
   function handleLoadHistory(item: HistoryRecord) {
+    setActiveDocumentId(null);
+    setPreviewPage(1);
+
     const bundle = coerceBundle(item.config);
     if (bundle) {
       applyConfigBundle(bundle);
@@ -527,11 +807,41 @@ export function DashboardPage() {
     }
   }
 
+  function handlePreviewRoiPageChange(nextPage: number) {
+    const clampedPage = clampPage(nextPage, activePageCount);
+    setPreviewPage(clampedPage);
+
+    if (visionConfig.rangeMode === "roi") {
+      updateVisionConfig({
+        roi: {
+          ...visionConfig.roi,
+          page: clampedPage,
+        },
+      });
+    }
+  }
+
   function updateRoi(patch: Partial<Roi>) {
+    if (visionConfig.rangeMode === "page_and_roi") {
+      const targetPage = clampPage(previewPage, activePageCount);
+      updateVisionConfig({
+        pageRois: {
+          ...(visionConfig.pageRois || {}),
+          [String(targetPage)]: {
+            ...activeVisionRoi,
+            ...patch,
+            page: targetPage,
+          },
+        },
+      });
+      return;
+    }
+
     updateVisionConfig({
       roi: {
         ...visionConfig.roi,
         ...patch,
+        page: clampPage(Number(patch.page ?? visionConfig.roi.page ?? 1), activePageCount),
       },
     });
   }
@@ -544,7 +854,6 @@ export function DashboardPage() {
     resetConfigs();
     resetResults();
     setEndpointCheckResult(null);
-    setLicenseResult(null);
     setRunStatus(createInitialRunStatus());
   }
 
@@ -572,17 +881,17 @@ export function DashboardPage() {
             type="file"
             accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
             className="hidden"
-            onChange={(event) => void handleFileSelection(event.target.files?.[0] || null)}
+            onChange={(event) => void handleFileInputChange(event)}
           />
         </label>
 
-        {fileMeta ? (
+        {activeFileMeta ? (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {[
-              [t("section.meta.file"), fileMeta.fileName],
-              [t("section.meta.size"), formatBytes(fileMeta.fileSize)],
-              [t("section.meta.mime"), fileMeta.mimeType],
-              [t("section.meta.pages"), String(fileMeta.pageCount)],
+              [t("section.meta.file"), activeFileMeta.fileName],
+              [t("section.meta.size"), formatBytes(activeFileMeta.fileSize)],
+              [t("section.meta.mime"), activeFileMeta.mimeType],
+              [t("section.meta.pages"), String(activeFileMeta.pageCount)],
             ].map(([label, value]) => (
               <div key={label} className="rounded-2xl bg-slate-50 p-4">
                 <p className="text-xs uppercase tracking-[0.25em] text-slate-500">{label}</p>
@@ -591,6 +900,85 @@ export function DashboardPage() {
             ))}
           </div>
         ) : null}
+
+        <div className="rounded-[28px] border border-slate-200 bg-slate-50/80 p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-ink">{t("section.file.library_title")}</p>
+              <p className="mt-1 text-sm text-slate-500">{t("section.file.library_subtitle")}</p>
+            </div>
+            {activeDocument ? (
+              <span className="inline-flex rounded-full border border-teal/20 bg-teal/10 px-3 py-1 text-xs font-medium text-teal">
+                {t("section.file.active_target")}: {activeDocument.meta.fileName}
+              </span>
+            ) : null}
+          </div>
+
+          {uploadedDocuments.length === 0 ? (
+            <div className="mt-4 rounded-[24px] border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500">
+              {t("section.file.library_empty")}
+            </div>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {uploadedDocuments.map((document) => {
+                const isActive = document.id === activeDocumentId;
+                return (
+                  <div
+                    key={document.id}
+                    className={`flex w-full items-start justify-between gap-4 rounded-[24px] border px-4 py-4 text-left transition ${
+                      isActive
+                        ? "border-teal bg-white shadow-sm"
+                        : "border-slate-200 bg-white hover:border-teal/60"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void handleSelectUploadedDocument(document.id)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <p className="truncate text-sm font-medium text-ink">
+                        {document.meta.fileName}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {formatBytes(document.meta.fileSize)} · {document.meta.mimeType} ·{" "}
+                        {t("section.meta.pages")} {document.meta.pageCount}
+                      </p>
+                    </button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-medium ${
+                          isActive
+                            ? "bg-teal text-white"
+                            : "border border-slate-200 bg-slate-50 text-slate-600"
+                        }`}
+                      >
+                        {isActive ? t("section.file.active_badge") : t("button.load")}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteUploadedDocument(document.id)}
+                        className="rounded-full border border-red-200 px-3 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50"
+                      >
+                        {t("button.delete")}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <DocumentPreview
+          file={selectedFile}
+          pageCount={activeFileMeta?.pageCount || 1}
+          maxPages={3}
+          emptyMessage={
+            uploadedDocuments.length > 0 && !selectedFile
+              ? t("section.file.choose_from_library")
+              : undefined
+          }
+        />
       </SectionCard>
 
       <SectionCard title={t("section.upstage.title")} subtitle={t("section.upstage.subtitle")}>
@@ -607,21 +995,9 @@ export function DashboardPage() {
             onChange={(event) => updateUpstageConfig({ endpointsUrl: event.target.value })}
             placeholder="http://dp-server:8080/api/endpoints"
           />
-          <InputField
-            label={t("field.license_url")}
-            value={upstageConfig.licenseUrl}
-            onChange={(event) => updateUpstageConfig({ licenseUrl: event.target.value })}
-            placeholder="http://dp-server:8080/api/license"
-          />
-          <InputField
-            label={t("field.model")}
-            value={upstageConfig.model}
-            onChange={(event) => updateUpstageConfig({ model: event.target.value })}
-            placeholder={t("common.optional")}
-          />
         </div>
 
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-3">
           <label className="space-y-2">
             <span className="text-sm font-medium text-slate-700">{t("field.ocr_mode")}</span>
             <select
@@ -650,11 +1026,6 @@ export function DashboardPage() {
             onChange={(event) =>
               updateUpstageConfig({ retryCount: Number(event.target.value || 0) })
             }
-          />
-          <InputField
-            label={t("field.license_key")}
-            value={upstageConfig.licenseKey}
-            onChange={(event) => updateUpstageConfig({ licenseKey: event.target.value })}
           />
         </div>
 
@@ -700,20 +1071,12 @@ export function DashboardPage() {
           </div>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <TextareaField
-            label={t("field.extra_headers_json")}
-            value={upstageConfig.headersJson}
-            onChange={(event) => updateUpstageConfig({ headersJson: event.target.value })}
-            className="min-h-28 font-mono"
-          />
-          <TextareaField
-            label={t("field.license_body_json")}
-            value={upstageConfig.licenseBodyJson}
-            onChange={(event) => updateUpstageConfig({ licenseBodyJson: event.target.value })}
-            className="min-h-28 font-mono"
-          />
-        </div>
+        <TextareaField
+          label={t("field.extra_headers_json")}
+          value={upstageConfig.headersJson}
+          onChange={(event) => updateUpstageConfig({ headersJson: event.target.value })}
+          className="min-h-28 font-mono"
+        />
 
         <div className="flex flex-wrap gap-3">
           <button
@@ -723,19 +1086,11 @@ export function DashboardPage() {
           >
             {t("button.check_endpoints")}
           </button>
-          <button
-            type="button"
-            className="rounded-full bg-coral px-5 py-3 text-sm font-medium text-white transition hover:opacity-90"
-            onClick={() => void handleRegisterLicense()}
-          >
-            {t("button.register_license")}
-          </button>
         </div>
 
         {endpointCheckResult ? (
           <JsonViewer label={t("json.endpoint_check")} data={endpointCheckResult} />
         ) : null}
-        {licenseResult ? <JsonViewer label={t("json.license_result")} data={licenseResult} /> : null}
       </SectionCard>
 
       <SectionCard title={t("section.vision.title")} subtitle={t("section.vision.subtitle")}>
@@ -871,13 +1226,13 @@ export function DashboardPage() {
         </div>
 
         {(visionConfig.rangeMode === "page_range" || visionConfig.rangeMode === "page_and_roi") &&
-        fileMeta?.mimeType === "application/pdf" ? (
+        activeFileMeta?.mimeType === "application/pdf" ? (
           <div className="grid gap-4 md:grid-cols-2">
             <InputField
               label={t("field.page_start")}
               type="number"
               min="1"
-              max={String(fileMeta.pageCount)}
+              max={String(activeFileMeta.pageCount)}
               value={String(visionConfig.pageRangeStart)}
               onChange={(event) =>
                 updateVisionConfig({ pageRangeStart: Number(event.target.value || 1) })
@@ -887,7 +1242,7 @@ export function DashboardPage() {
               label={t("field.page_end")}
               type="number"
               min="1"
-              max={String(fileMeta.pageCount)}
+              max={String(activeFileMeta.pageCount)}
               value={String(visionConfig.pageRangeEnd)}
               onChange={(event) =>
                 updateVisionConfig({ pageRangeEnd: Number(event.target.value || 1) })
@@ -901,10 +1256,10 @@ export function DashboardPage() {
             <RoiSelector
               file={selectedFile}
               page={previewPage}
-              onPageChange={setPreviewPage}
-              pageCount={fileMeta?.pageCount || 1}
-              roi={visionConfig.roi}
-              onRoiChange={(roi) => updateVisionConfig({ roi })}
+              onPageChange={handlePreviewRoiPageChange}
+              pageCount={activeFileMeta?.pageCount || 1}
+              roi={activeVisionRoi}
+              onRoiChange={updateRoi}
               enabled={roiEnabled}
             />
             <div className="grid gap-4 md:grid-cols-5">
@@ -914,7 +1269,7 @@ export function DashboardPage() {
                 step="0.001"
                 min="0"
                 max="1"
-                value={String(visionConfig.roi.x)}
+                value={String(activeVisionRoi.x)}
                 onChange={(event) => updateRoi({ x: Number(event.target.value || 0) })}
               />
               <InputField
@@ -923,7 +1278,7 @@ export function DashboardPage() {
                 step="0.001"
                 min="0"
                 max="1"
-                value={String(visionConfig.roi.y)}
+                value={String(activeVisionRoi.y)}
                 onChange={(event) => updateRoi({ y: Number(event.target.value || 0) })}
               />
               <InputField
@@ -932,7 +1287,7 @@ export function DashboardPage() {
                 step="0.001"
                 min="0"
                 max="1"
-                value={String(visionConfig.roi.width)}
+                value={String(activeVisionRoi.width)}
                 onChange={(event) => updateRoi({ width: Number(event.target.value || 0.1) })}
               />
               <InputField
@@ -941,16 +1296,16 @@ export function DashboardPage() {
                 step="0.001"
                 min="0"
                 max="1"
-                value={String(visionConfig.roi.height)}
+                value={String(activeVisionRoi.height)}
                 onChange={(event) => updateRoi({ height: Number(event.target.value || 0.1) })}
               />
               <InputField
                 label={t("field.roi_page")}
                 type="number"
                 min="1"
-                max={String(fileMeta?.pageCount || 1)}
-                value={String(visionConfig.roi.page || 1)}
-                onChange={(event) => updateRoi({ page: Number(event.target.value || 1) })}
+                max={String(activeFileMeta?.pageCount || 1)}
+                value={String(visionConfig.rangeMode === "page_and_roi" ? previewPage : activeVisionRoi.page || 1)}
+                onChange={(event) => handlePreviewRoiPageChange(Number(event.target.value || 1))}
               />
             </div>
           </>
@@ -1152,7 +1507,7 @@ export function DashboardPage() {
               {t("presets.empty")}
             </div>
           ) : (
-            presets.map((preset) => (
+            visiblePresets.map((preset) => (
               <div
                 key={preset.id}
                 className="rounded-[24px] border border-slate-200 bg-slate-50 p-4"
@@ -1191,6 +1546,41 @@ export function DashboardPage() {
             ))
           )}
         </div>
+
+        {presets.length > PRESETS_PER_PAGE ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPresetPage((current) => Math.max(1, current - 1))}
+              disabled={presetPage === 1}
+              className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-teal hover:text-teal disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {"<"}
+            </button>
+            {Array.from({ length: totalPresetPages }, (_, index) => index + 1).map((page) => (
+              <button
+                key={page}
+                type="button"
+                onClick={() => setPresetPage(page)}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                  page === presetPage
+                    ? "bg-teal text-white"
+                    : "border border-slate-300 bg-white text-slate-700 hover:border-teal hover:text-teal"
+                }`}
+              >
+                {page}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setPresetPage((current) => Math.min(totalPresetPages, current + 1))}
+              disabled={presetPage === totalPresetPages}
+              className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-teal hover:text-teal disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {">"}
+            </button>
+          </div>
+        ) : null}
       </SectionCard>
 
       <SectionCard title={t("section.history.title")} subtitle={t("section.history.subtitle")}>
