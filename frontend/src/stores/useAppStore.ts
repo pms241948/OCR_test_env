@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import type { AppLanguage } from "../utils/i18n";
 import type {
   FileMeta,
   HistoryRecord,
@@ -34,7 +35,8 @@ const defaultVisionConfig: VisionConfig = {
   model: "",
   systemPrompt: "You are an OCR assistant that extracts text with high fidelity.",
   userPrompt: "Extract the document text accurately.",
-  extractionRules: "줄바꿈 유지\n표 구조 유지\n숫자/기호 정확도 우선",
+  extractionRules:
+    "Preserve line breaks\nPreserve table structure\nPrioritize number and symbol accuracy",
   temperature: 0.1,
   maxTokens: 4000,
   topP: 1,
@@ -74,6 +76,7 @@ const defaultPostprocessConfig: PostprocessConfig = {
 };
 
 type AppStore = {
+  language: AppLanguage;
   upstageConfig: UpstageConfig;
   visionConfig: VisionConfig;
   postprocessConfig: PostprocessConfig;
@@ -89,17 +92,22 @@ type AppStore = {
   updateVisionConfig: (patch: Partial<VisionConfig>) => void;
   updatePostprocessConfig: (patch: Partial<PostprocessConfig>) => void;
   setFileMeta: (fileMeta: FileMeta | null) => void;
-  setStageResult: (stage: "upstage" | "vision" | "postprocess", result: StageResponse | null) => void;
+  setStageResult: (
+    stage: "upstage" | "vision" | "postprocess",
+    result: StageResponse | null
+  ) => void;
   resetResults: () => void;
   setPresets: (presets: PresetRecord[]) => void;
   setHistory: (history: HistoryRecord[]) => void;
   applyConfigBundle: (config: StoredConfigBundle) => void;
   resetConfigs: () => void;
+  setLanguage: (language: AppLanguage) => void;
 };
 
 export const useAppStore = create<AppStore>()(
   persist(
     (set) => ({
+      language: "en",
       upstageConfig: defaultUpstageConfig,
       visionConfig: defaultVisionConfig,
       postprocessConfig: defaultPostprocessConfig,
@@ -162,11 +170,13 @@ export const useAppStore = create<AppStore>()(
           visionConfig: defaultVisionConfig,
           postprocessConfig: defaultPostprocessConfig,
         }),
+      setLanguage: (language) => set({ language }),
     }),
     {
       name: "ocr-compare-store",
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
+        language: state.language,
         upstageConfig: state.upstageConfig,
         visionConfig: state.visionConfig,
         postprocessConfig: state.postprocessConfig,

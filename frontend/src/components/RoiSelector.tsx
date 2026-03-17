@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
+import { useAppStore } from "../stores/useAppStore";
+import { translate } from "../utils/i18n";
 import type { Roi } from "../utils/types";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -45,6 +47,8 @@ export function RoiSelector({
   onRoiChange,
   enabled,
 }: RoiSelectorProps) {
+  const language = useAppStore((state) => state.language);
+  const t = (key: string) => translate(language, key);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -76,7 +80,7 @@ export function RoiSelector({
           const context = canvas.getContext("2d");
 
           if (!context) {
-            throw new Error("캔버스를 초기화하지 못했습니다.");
+            throw new Error(t("roi.canvas_error"));
           }
 
           canvas.width = viewport.width;
@@ -92,7 +96,7 @@ export function RoiSelector({
         }
       } catch (error) {
         if (active) {
-          setPreviewError(error instanceof Error ? error.message : "미리보기를 생성하지 못했습니다.");
+          setPreviewError(error instanceof Error ? error.message : t("roi.preview_error"));
           setPreviewUrl("");
         }
       } finally {
@@ -110,7 +114,7 @@ export function RoiSelector({
         URL.revokeObjectURL(localUrl);
       }
     };
-  }, [file, page]);
+  }, [file, page, language]);
 
   const visibleRoi = useMemo(() => {
     if (!roi) {
@@ -208,10 +212,10 @@ export function RoiSelector({
             onClick={() => onPageChange(Math.max(1, page - 1))}
             disabled={page <= 1}
           >
-            이전 페이지
+            {t("roi.prev_page")}
           </button>
           <span className="text-sm text-slate-600">
-            페이지 {page} / {pageCount}
+            {t("roi.page")} {page} / {pageCount}
           </span>
           <button
             type="button"
@@ -219,7 +223,7 @@ export function RoiSelector({
             onClick={() => onPageChange(Math.min(pageCount, page + 1))}
             disabled={page >= pageCount}
           >
-            다음 페이지
+            {t("roi.next_page")}
           </button>
         </div>
       ) : null}
@@ -234,7 +238,7 @@ export function RoiSelector({
         >
           {loading ? (
             <div className="flex h-80 items-center justify-center text-sm text-slate-500">
-              미리보기를 생성하는 중입니다.
+              {t("roi.loading_preview")}
             </div>
           ) : previewError ? (
             <div className="flex h-80 items-center justify-center px-6 text-center text-sm text-red-600">
@@ -273,7 +277,7 @@ export function RoiSelector({
             </>
           ) : (
             <div className="flex h-80 items-center justify-center text-sm text-slate-500">
-              업로드한 파일 미리보기가 여기에 표시됩니다.
+              {t("roi.preview_placeholder")}
             </div>
           )}
         </div>

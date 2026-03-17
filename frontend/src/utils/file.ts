@@ -27,7 +27,7 @@ export async function getLocalFileMeta(file: File): Promise<FileMeta> {
     return meta;
   }
 
-  throw new Error("지원하지 않는 파일 형식입니다.");
+  throw new Error("Unsupported file type.");
 }
 
 export function formatBytes(bytes: number): string {
@@ -74,7 +74,7 @@ export async function getImageDimensions(file: File): Promise<{ width: number; h
       URL.revokeObjectURL(src);
     };
     image.onerror = () => {
-      reject(new Error("이미지 미리보기를 불러오지 못했습니다."));
+      reject(new Error("Failed to load the image preview."));
       URL.revokeObjectURL(src);
     };
     image.src = src;

@@ -1,4 +1,6 @@
+import { useAppStore } from "../stores/useAppStore";
 import { downloadText } from "../utils/file";
+import { translate } from "../utils/i18n";
 import { JsonViewer } from "./JsonViewer";
 
 type ResultPaneProps = {
@@ -21,6 +23,8 @@ export function ResultPane({
   errorMessage,
 }: ResultPaneProps) {
   const value = text || "";
+  const language = useAppStore((state) => state.language);
+  const t = (key: string) => translate(language, key);
 
   return (
     <div className="flex min-h-[28rem] flex-col rounded-[26px] border border-slate-200 bg-white">
@@ -28,7 +32,7 @@ export function ResultPane({
         <div>
           <h3 className="font-semibold text-ink">{title}</h3>
           <p className="text-xs text-slate-500">
-            {statusCode ? `HTTP ${statusCode}` : "아직 실행되지 않음"}
+            {statusCode ? `HTTP ${statusCode}` : t("result.not_run")}
           </p>
         </div>
         <div className="flex gap-2">
@@ -38,7 +42,7 @@ export function ResultPane({
             onClick={() => navigator.clipboard.writeText(value)}
             disabled={!value}
           >
-            복사
+            {t("button.copy")}
           </button>
           <button
             type="button"
@@ -46,7 +50,7 @@ export function ResultPane({
             onClick={() => downloadText(`${title}.txt`, value)}
             disabled={!value}
           >
-            다운로드
+            {t("button.download")}
           </button>
         </div>
       </div>
@@ -62,13 +66,13 @@ export function ResultPane({
           readOnly
           value={value}
           className="h-64 w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm leading-6 text-slate-800 outline-none"
-          placeholder="실행 후 텍스트 결과가 표시됩니다."
+          placeholder={t("result.placeholder")}
         />
 
         {promptPreview ? (
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-              Prompt Preview
+              {t("result.prompt_preview")}
             </p>
             <pre className="max-h-40 overflow-auto whitespace-pre-wrap text-xs leading-6 text-slate-700">
               {promptPreview}
@@ -79,7 +83,7 @@ export function ResultPane({
         {referencePreview ? (
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-              Reference Preview
+              {t("result.reference_preview")}
             </p>
             <pre className="max-h-40 overflow-auto whitespace-pre-wrap text-xs leading-6 text-slate-700">
               {referencePreview}
@@ -87,7 +91,7 @@ export function ResultPane({
           </div>
         ) : null}
 
-        <JsonViewer label="원본 응답 JSON" data={raw ?? {}} />
+        <JsonViewer label={t("result.raw_json")} data={raw ?? {}} />
       </div>
     </div>
   );
