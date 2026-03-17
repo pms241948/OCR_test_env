@@ -317,7 +317,10 @@ export function DashboardPage() {
   }
 
   async function handleRunPostprocess() {
-    if (!fileMeta || !results.upstage || !results.vision) {
+    const upstageResult = results.upstage;
+    const visionResult = results.vision;
+
+    if (!fileMeta || !upstageResult || !visionResult) {
       alert("Run Upstage and Vision first.");
       return;
     }
@@ -325,8 +328,8 @@ export function DashboardPage() {
     await executeStage("postprocess", async () => {
       const response = await runPostprocessApi({
         file: fileMeta,
-        upstageResult: results.upstage,
-        visionResult: results.vision,
+        upstageResult,
+        visionResult,
         config: postprocessConfig,
       });
       setStageResult("postprocess", response);
