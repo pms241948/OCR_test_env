@@ -20,6 +20,7 @@ const defaultUpstageConfig: UpstageConfig = {
   ocrMode: "auto",
   coordinates: true,
   outputFormats: ["text", "html", "markdown"],
+  model: "document-parse",
   base64Encoding: false,
   timeoutMs: 300000,
   retryCount: 1,
@@ -189,8 +190,14 @@ export const useAppStore = create<AppStore>()(
       partialize: (state) => ({
         language: state.language,
         upstageConfig: state.upstageConfig,
-        visionConfig: state.visionConfig,
-        postprocessConfig: state.postprocessConfig,
+        visionConfig: {
+          ...state.visionConfig,
+          apiKey: "",
+        },
+        postprocessConfig: {
+          ...state.postprocessConfig,
+          apiKey: "",
+        },
       }),
     }
   )

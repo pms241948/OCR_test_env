@@ -9,6 +9,7 @@ const {
 const { AppError } = require("../utils/errors");
 const { cleanupUploadedFile, getDocumentMetadata, sha256File } = require("../utils/file");
 const { parseJsonField } = require("../utils/parsing");
+const { sanitizeConfigForStorage } = require("../utils/storageSanitizer");
 const {
   checkEndpoints,
   runUpstageDocumentParse,
@@ -52,7 +53,7 @@ async function persistRun({
     mimeType: fileContext?.metadata?.mimeType || file?.mimetype || null,
     fileSize: fileContext?.metadata?.fileSize || file?.size || null,
     filePages: fileContext?.metadata?.pageCount || null,
-    config,
+    config: sanitizeConfigForStorage(config),
     roi,
     result,
   });
@@ -241,7 +242,7 @@ async function createHistoryEntry(req, res) {
     mimeType: body.mimeType || null,
     fileSize: body.fileSize || null,
     filePages: body.filePages || null,
-    config: body.config || {},
+    config: sanitizeConfigForStorage(body.config || {}),
     roi: body.roi || null,
     result: body.result || {},
   });
@@ -270,7 +271,7 @@ async function createPreset(req, res) {
   const id = createPresetRecord({
     name: body.name,
     description: body.description || "",
-    config: body.config || {},
+    config: sanitizeConfigForStorage(body.config || {}),
   });
 
   res.status(201).json({
@@ -290,7 +291,7 @@ async function updatePreset(req, res) {
   updatePresetRecord(id, {
     name: body.name,
     description: body.description || "",
-    config: body.config || {},
+    config: sanitizeConfigForStorage(body.config || {}),
   });
 
   res.json({

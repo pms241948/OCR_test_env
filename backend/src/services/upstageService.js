@@ -16,6 +16,10 @@ function getOutputFormats(config) {
   return ["text", "html", "markdown"];
 }
 
+function getModel(config) {
+  return config.model || "document-parse";
+}
+
 async function runUpstageDocumentParse({ file, fileMetadata, config }) {
   const url = config.url;
 
@@ -41,11 +45,10 @@ async function runUpstageDocumentParse({ file, fileMetadata, config }) {
 
   form.append("coordinates", String(config.coordinates ?? true));
 
-  getOutputFormats(config).forEach((format) => {
-    form.append("output_formats", format);
-  });
+  form.append("output_formats", JSON.stringify(getOutputFormats(config)));
+  form.append("model", getModel(config));
 
-  if (typeof config.base64Encoding !== "undefined") {
+  if (config.base64Encoding) {
     form.append("base64_encoding", String(config.base64Encoding));
   }
 
@@ -74,6 +77,7 @@ async function runUpstageDocumentParse({ file, fileMetadata, config }) {
         ocrMode: config.ocrMode || "auto",
         coordinates: Boolean(config.coordinates ?? true),
         outputFormats: getOutputFormats(config),
+        model: getModel(config),
         base64Encoding: Boolean(config.base64Encoding ?? false),
         timeoutMs,
         retryCount,

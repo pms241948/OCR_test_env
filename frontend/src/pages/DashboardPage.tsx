@@ -150,10 +150,40 @@ function StatusPill({
 
 function getErrorMessage(error: unknown, language: AppLanguage): string {
   if (axios.isAxiosError(error)) {
-    return (
-      (error.response?.data as { error?: { message?: string } })?.error?.message ||
-      error.message
-    );
+    const payload = error.response?.data as
+      | {
+          error?: {
+            message?: string;
+            details?: {
+              message?: string;
+              remoteStatus?: number;
+              remoteData?: unknown;
+            };
+          };
+        }
+      | undefined;
+    const baseMessage = payload?.error?.message || error.message;
+    const detailMessage = payload?.error?.details?.message;
+    const remoteStatus = payload?.error?.details?.remoteStatus;
+    const remoteData = payload?.error?.details?.remoteData;
+
+    if (remoteStatus && remoteData) {
+      const remoteSummary =
+        typeof remoteData === "string"
+          ? remoteData
+          : JSON.stringify(remoteData);
+      return `${baseMessage} (upstream ${remoteStatus}: ${remoteSummary})`;
+    }
+
+    if (remoteStatus) {
+      return `${baseMessage} (upstream ${remoteStatus})`;
+    }
+
+    if (detailMessage && detailMessage !== baseMessage) {
+      return `${baseMessage} (${detailMessage})`;
+    }
+
+    return baseMessage;
   }
 
   if (error instanceof Error) {
@@ -673,6 +703,15 @@ export function DashboardPage() {
       return;
     }
 
+    if (!postprocessConfig.url || !postprocessConfig.model) {
+      alert(
+        language === "ko"
+          ? "전체 파이프라인 실행에는 Postprocess LLM URL과 모델이 필요합니다."
+          : "Full pipeline requires the postprocess URL and model."
+      );
+      return;
+    }
+
     await executeStage("pipeline", async () => {
       const response = await runAllApi(selectedFile, currentBundle);
       setFileMeta(response.file);
@@ -997,7 +1036,7 @@ export function DashboardPage() {
           />
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-4">
           <label className="space-y-2">
             <span className="text-sm font-medium text-slate-700">{t("field.ocr_mode")}</span>
             <select
@@ -1011,6 +1050,11 @@ export function DashboardPage() {
               <option value="force">force</option>
             </select>
           </label>
+          <InputField
+            label={t("field.model")}
+            value={upstageConfig.model}
+            onChange={(event) => updateUpstageConfig({ model: event.target.value })}
+          />
           <InputField
             label={t("field.timeout_ms")}
             type="number"

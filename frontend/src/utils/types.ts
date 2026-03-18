@@ -33,6 +33,7 @@ export type UpstageConfig = {
   ocrMode: "auto" | "force";
   coordinates: boolean;
   outputFormats: string[];
+  model: string;
   base64Encoding: boolean;
   timeoutMs: number;
   retryCount: number;

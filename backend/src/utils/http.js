@@ -13,6 +13,14 @@ function isRetryableStatus(status) {
   return [408, 425, 429, 500, 502, 503, 504].includes(status);
 }
 
+function getUpstreamStatusCode(status) {
+  return status >= 400 && status <= 599 ? status : 502;
+}
+
+function isTimeoutError(error) {
+  return error?.code === "ECONNABORTED" || /timeout/i.test(error?.message || "");
+}
+
 async function requestJson({
   method,
   url,
@@ -45,8 +53,8 @@ async function requestJson({
       }
 
       lastError = new AppError(
-        `원격 서비스가 ${response.status} 응답을 반환했습니다.`,
-        502,
+        `Remote service returned HTTP ${response.status}.`,
+        getUpstreamStatusCode(response.status),
         {
           remoteStatus: response.status,
           remoteData: response.data,
@@ -64,7 +72,12 @@ async function requestJson({
         throw error;
       }
 
-      lastError = new AppError("원격 서비스 호출에 실패했습니다.", 502, {
+      const statusCode = isTimeoutError(error) ? 504 : 502;
+      const message = isTimeoutError(error)
+        ? "Remote service request timed out."
+        : "Failed to call remote service.";
+
+      lastError = new AppError(message, statusCode, {
         message: error.message,
       });
 
@@ -75,7 +88,7 @@ async function requestJson({
     }
   }
 
-  throw lastError || new AppError("알 수 없는 네트워크 오류가 발생했습니다.", 502);
+  throw lastError || new AppError("Unexpected network error.", 502);
 }
 
 module.exports = {
