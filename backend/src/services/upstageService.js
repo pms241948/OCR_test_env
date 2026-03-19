@@ -2,7 +2,7 @@ const fs = require("fs");
 const FormData = require("form-data");
 
 const { AppError } = require("../utils/errors");
-const { requestJson } = require("../utils/http");
+const { requestJson, requestJsonAllowAnyStatus } = require("../utils/http");
 const { parseJsonField } = require("../utils/parsing");
 const { validateTargetUrl } = require("../utils/urlValidator");
 
@@ -118,7 +118,56 @@ async function checkEndpoints(payload) {
   };
 }
 
+async function testUpstageConnection(config) {
+  const url = config.url;
+
+  if (!url) {
+    throw new AppError("Upstage DP connection test URL is required.", 400);
+  }
+
+  await validateTargetUrl(url);
+
+  const headers = parseJsonField(config.headersJson, {});
+  const timeoutMs = Number(config.timeoutMs || 30000);
+  const form = new FormData();
+
+  form.append("coordinates", String(config.coordinates ?? true));
+  form.append("output_formats", JSON.stringify(getOutputFormats(config)));
+  form.append("model", getModel(config));
+
+  const response = await requestJsonAllowAnyStatus({
+    method: "POST",
+    url,
+    data: form,
+    headers: {
+      ...form.getHeaders(),
+      ...headers,
+    },
+    timeoutMs,
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
+  });
+
+  return {
+    stage: "upstage_connection",
+    ok: response.status >= 200 && response.status < 300,
+    reachable: true,
+    statusCode: response.status,
+    request: {
+      url,
+      method: "POST",
+      note: "Connection check sends no document and does not run OCR.",
+      options: {
+        model: getModel(config),
+        outputFormats: getOutputFormats(config),
+      },
+    },
+    raw: response.data,
+  };
+}
+
 module.exports = {
   runUpstageDocumentParse,
   checkEndpoints,
+  testUpstageConnection,
 };

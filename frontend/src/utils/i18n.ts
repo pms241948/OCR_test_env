@@ -101,6 +101,7 @@ const en: Dictionary = {
   "field.postprocess_url": "Postprocess URL",
   "field.preset_name": "Preset Name",
   "field.description": "Description",
+  "toggle.use_hardcoded_prompts": "Use Hardcoded Prompt Rules",
   "toggle.include_coordinates": "Include Coordinates",
   "toggle.base64_encoding": "Base64 Encoding",
   "toggle.use_reference_text": "Use Reference Text",
@@ -111,6 +112,8 @@ const en: Dictionary = {
   "button.run_vision": "Run Vision OCR",
   "button.run_postprocess": "Run Postprocess",
   "button.run_full_pipeline": "Run Full Pipeline",
+  "button.test_call": "Test Call",
+  "button.check_connection": "Check Connection",
   "button.save_current_configuration": "Save Current Configuration",
   "button.load": "Load",
   "button.overwrite": "Overwrite",
@@ -141,6 +144,14 @@ const en: Dictionary = {
   "results.vision_range_info": "Vision Range Info",
   "results.upstage_summary": "Upstage Summary",
   "json.endpoint_check": "Endpoint Check Result",
+  "json.upstage_test": "Upstage Test Result",
+  "json.vision_test": "Vision Test Result",
+  "json.postprocess_test": "Postprocess Test Result",
+  "json.connection_note": "Connection check only sends a minimal request and does not run OCR.",
+  "help.vision_hardcoded_prompts":
+    "On: adds automatic OCR-only system rules, metadata, range info, output requirements, and tag-based extraction guards. Off: sends only your prompt fields and image input. Qwen-style models may become more verbose when this is off.",
+  "help.postprocess_hardcoded_prompts":
+    "On: adds automatic merge instructions and final-text-only rules. Off: removes those automatic rules and sends your prompt fields with a minimal OCR source payload so the model can still compare the two OCR results.",
   "json.license_result": "License Result",
   "result.not_run": "Not run yet",
   "result.placeholder": "Text output will appear here after execution.",
@@ -328,6 +339,18 @@ const resources: Record<AppLanguage, Dictionary> = {
   en,
   ko,
 };
+
+ko["toggle.use_hardcoded_prompts"] = "\uD558\uB4DC\uCF54\uB529 \uD504\uB86C\uD504\uD2B8 \uADDC\uCE59 \uC0AC\uC6A9";
+ko["button.check_connection"] = "\uC5F0\uACB0 \uD655\uC778";
+ko["json.upstage_test"] = "Upstage \uC5F0\uACB0 \uD14C\uC2A4\uD2B8 \uACB0\uACFC";
+ko["json.vision_test"] = "Vision \uC5F0\uACB0 \uD14C\uC2A4\uD2B8 \uACB0\uACFC";
+ko["json.postprocess_test"] = "Postprocess \uC5F0\uACB0 \uD14C\uC2A4\uD2B8 \uACB0\uACFC";
+ko["json.connection_note"] =
+  "\uC5F0\uACB0 \uD655\uC778\uC740 \uCD5C\uC18C \uC694\uCCAD\uB9CC \uBCF4\uB0B4\uBA70 OCR \uC2E4\uD589\uC740 \uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.";
+ko["help.vision_hardcoded_prompts"] =
+  "\uCF1C\uC9C0\uBA74 OCR \uC804\uC6A9 \uC2DC\uC2A4\uD15C \uADDC\uCE59, \uBB38\uC11C \uBA54\uD0C0\uB370\uC774\uD130, \uBC94\uC704 \uC815\uBCF4, \uCD9C\uB825 \uC694\uAD6C\uC0AC\uD56D, \uD0DC\uADF8 \uAE30\uBC18 \uCD94\uCD9C \uAC00\uB4DC\uAC00 \uC790\uB3D9\uC73C\uB85C \uCD94\uAC00\uB429\uB2C8\uB2E4. \uB044\uBA74 \uC0AC\uC6A9\uC790\uAC00 \uC785\uB825\uD55C \uD504\uB86C\uD504\uD2B8 \uD544\uB4DC\uC640 \uC774\uBBF8\uC9C0\uB9CC \uC804\uC1A1\uB429\uB2C8\uB2E4. Qwen \uACC4\uC5F4\uC740 \uB044\uBA74 \uC124\uBA85\uD615 \uC751\uB2F5\uC774 \uB2E4\uC2DC \uC11E\uC77C \uC218 \uC788\uC2B5\uB2C8\uB2E4.";
+ko["help.postprocess_hardcoded_prompts"] =
+  "\uCF1C\uC9C0\uBA74 OCR \uACB0\uACFC \uD1B5\uD569 \uC9C0\uC2DC\uBB38\uACFC \uCD5C\uC885 \uD14D\uC2A4\uD2B8\uB9CC \uBC18\uD658\uD558\uB294 \uADDC\uCE59\uC774 \uC790\uB3D9 \uCD94\uAC00\uB429\uB2C8\uB2E4. \uB044\uBA74 \uADF8 \uC790\uB3D9 \uADDC\uCE59\uC744 \uBE7C\uACE0, \uC0AC\uC6A9\uC790 \uD504\uB86C\uD504\uD2B8 \uD544\uB4DC\uC640 \uCD5C\uC18C OCR \uC18C\uC2A4 \uD398\uC774\uB85C\uB4DC\uB9CC \uBCF4\uB0C5\uB2C8\uB2E4.";
 
 export function translate(language: AppLanguage, key: string): string {
   return resources[language][key] || resources.en[key] || key;

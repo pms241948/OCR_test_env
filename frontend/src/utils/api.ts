@@ -27,12 +27,22 @@ export async function runUpstageApi(file: File, config: UpstageConfig): Promise<
   return unwrap<{ file: FileMeta } & StageResponse>(response);
 }
 
+export async function testUpstageCallApi(config: UpstageConfig): Promise<unknown> {
+  const response = await api.post("/ocr/upstage/test-call", config);
+  return unwrap(response);
+}
+
 export async function runVisionApi(file: File, config: VisionConfig): Promise<StageResponse> {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("config", JSON.stringify(config));
   const response = await api.post("/ocr/vision-llm", formData);
   return unwrap<{ file: FileMeta } & StageResponse>(response);
+}
+
+export async function testVisionCallApi(config: VisionConfig): Promise<unknown> {
+  const response = await api.post("/ocr/vision-llm/test-call", config);
+  return unwrap(response);
 }
 
 export async function runPostprocessApi(payload: {
@@ -43,6 +53,13 @@ export async function runPostprocessApi(payload: {
 }): Promise<StageResponse> {
   const response = await api.post("/postprocess", payload);
   return unwrap<StageResponse>(response);
+}
+
+export async function testPostprocessCallApi(payload: {
+  config: PostprocessConfig;
+}): Promise<unknown> {
+  const response = await api.post("/postprocess/test-call", payload);
+  return unwrap(response);
 }
 
 export async function runAllApi(
@@ -74,6 +91,10 @@ export async function checkUpstageEndpointsApi(payload: {
 export async function fetchHistoryApi(): Promise<HistoryRecord[]> {
   const response = await api.get("/history");
   return unwrap(response);
+}
+
+export async function deleteHistoryApi(id: number): Promise<void> {
+  await api.delete(`/history/${id}`);
 }
 
 export async function fetchPresetsApi(): Promise<PresetRecord[]> {

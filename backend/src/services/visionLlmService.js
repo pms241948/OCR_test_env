@@ -4,9 +4,14 @@ const path = require("path");
 const sharp = require("sharp");
 
 const { AppError } = require("../utils/errors");
-const { requestJson } = require("../utils/http");
+const { requestJson, requestJsonAllowAnyStatus } = require("../utils/http");
 const { parseJsonField } = require("../utils/parsing");
-const { buildVisionPrompt, extractAssistantText } = require("../utils/prompt");
+const {
+  buildVisionPrompt,
+  buildVisionSystemPrompt,
+  extractAssistantText,
+  extractVisionText,
+} = require("../utils/prompt");
 const {
   createTempDir,
   fileToDataUrl,
@@ -16,7 +21,7 @@ const {
   pageRangeFromConfig,
 } = require("../utils/file");
 const { renderPdfPagesToPng } = require("../utils/pdf");
-const { validateTargetUrl } = require("../utils/urlValidator");
+const { normalizeOpenAiChatUrl, validateTargetUrl } = require("../utils/urlValidator");
 
 async function cropImage(inputPath, roi, outputPath) {
   const image = sharp(inputPath);
@@ -203,7 +208,8 @@ async function prepareImageAssets(file, fileMetadata, config) {
 }
 
 async function runVisionOcr({ file, fileMetadata, config }) {
-  const url = config.url;
+  const url = normalizeOpenAiChatUrl(config.url);
+  const useHardcodedPrompts = config.useHardcodedPrompts !== false;
 
   if (!url) {
     throw new AppError("비전 LLM 호출 URL이 필요합니다.", 400);
@@ -222,6 +228,11 @@ async function runVisionOcr({ file, fileMetadata, config }) {
   const prepared = await prepareImageAssets(file, fileMetadata, config);
 
   try {
+    const effectiveSystemPrompt = buildVisionSystemPrompt(
+      config.systemPrompt,
+      useHardcodedPrompts
+    );
+    const messages = [];
     const userContent = [
       {
         type: "text",
@@ -229,6 +240,7 @@ async function runVisionOcr({ file, fileMetadata, config }) {
           fileMetadata,
           config,
           range: prepared.range,
+          useHardcodedPrompts,
         }),
       },
     ];
@@ -242,20 +254,21 @@ async function runVisionOcr({ file, fileMetadata, config }) {
       });
     }
 
+    if (effectiveSystemPrompt) {
+      messages.push({
+        role: "system",
+        content: effectiveSystemPrompt,
+      });
+    }
+
+    messages.push({
+      role: "user",
+      content: userContent,
+    });
+
     const payload = {
       model: config.model,
-      messages: [
-        {
-          role: "system",
-          content:
-            config.systemPrompt ||
-            "You extract OCR text from document images with high fidelity.",
-        },
-        {
-          role: "user",
-          content: userContent,
-        },
-      ],
+      messages,
       temperature: Number(config.temperature ?? 0.1),
       max_tokens: Number(config.maxTokens || 4000),
       top_p: Number(config.topP ?? 1),
@@ -290,9 +303,7 @@ async function runVisionOcr({ file, fileMetadata, config }) {
         payload,
       },
       usedPrompt: {
-        systemPrompt:
-          config.systemPrompt ||
-          "You extract OCR text from document images with high fidelity.",
+        systemPrompt: effectiveSystemPrompt,
         userPrompt: config.userPrompt || "",
         compiledPrompt: userContent[0].text,
         extractionRules: config.extractionRules || "",
@@ -312,13 +323,81 @@ async function runVisionOcr({ file, fileMetadata, config }) {
         cropped: item.cropped,
       })),
       raw: response.data,
-      text: extractAssistantText(response.data),
+      text: extractVisionText(response.data),
     };
   } finally {
     await fs.rm(prepared.tempDir, { recursive: true, force: true }).catch(() => null);
   }
 }
 
+async function testVisionConnection(config) {
+  const url = normalizeOpenAiChatUrl(config.url);
+
+  if (!url) {
+    throw new AppError("Vision connection test URL is required.", 400);
+  }
+
+  if (!config.model) {
+    throw new AppError("Vision connection test model is required.", 400);
+  }
+
+  await validateTargetUrl(url);
+
+  const timeoutMs = Number(config.timeoutMs || 30000);
+  const extraHeaders = parseJsonField(config.headersJson, {});
+  const extraBody = parseJsonField(config.extraBodyJson, {});
+  const payload = {
+    model: config.model,
+    messages: [
+      {
+        role: "system",
+        content: "You are a connection test. Reply with OK only.",
+      },
+      {
+        role: "user",
+        content: "OK",
+      },
+    ],
+    temperature: 0,
+    max_tokens: 8,
+    top_p: 1,
+    ...extraBody,
+  };
+  const headers = {
+    "Content-Type": "application/json",
+    ...extraHeaders,
+  };
+
+  if (config.apiKey) {
+    headers.Authorization = `Bearer ${config.apiKey}`;
+  }
+
+  const response = await requestJsonAllowAnyStatus({
+    method: "POST",
+    url,
+    headers,
+    data: payload,
+    timeoutMs,
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
+  });
+
+  return {
+    stage: "vision_connection",
+    ok: response.status >= 200 && response.status < 300,
+    reachable: true,
+    statusCode: response.status,
+    request: {
+      url,
+      payload,
+      note: "Connection check sends a minimal text-only chat request and does not run OCR.",
+    },
+    raw: response.data,
+    text: extractAssistantText(response.data),
+  };
+}
+
 module.exports = {
   runVisionOcr,
+  testVisionConnection,
 };

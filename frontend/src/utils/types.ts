@@ -43,6 +43,7 @@ export type LlmBaseConfig = {
   url: string;
   apiKey: string;
   model: string;
+  useHardcodedPrompts: boolean;
   systemPrompt: string;
   userPrompt: string;
   temperature: number;

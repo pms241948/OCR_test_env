@@ -10,6 +10,40 @@ const { PDFDocument } = require("pdf-lib");
 const { env } = require("./env");
 const { AppError } = require("./errors");
 
+function isAsciiOnly(value) {
+  return !/[^\u0000-\u007f]/.test(value || "");
+}
+
+function countMatches(value, pattern) {
+  return (value.match(pattern) || []).length;
+}
+
+function normalizeUploadFilename(fileName) {
+  if (!fileName || isAsciiOnly(fileName)) {
+    return fileName;
+  }
+
+  const decoded = Buffer.from(fileName, "latin1").toString("utf8");
+  const originalHangul = countMatches(fileName, /[\uac00-\ud7a3]/g);
+  const decodedHangul = countMatches(decoded, /[\uac00-\ud7a3]/g);
+  const originalMojibake = countMatches(fileName, /[\u00C0-\u00FF\u0080-\u00BF]/g);
+  const decodedReplacement = countMatches(decoded, /\uFFFD/g);
+
+  if (decodedReplacement > 0) {
+    return fileName;
+  }
+
+  if (decodedHangul > originalHangul) {
+    return decoded;
+  }
+
+  if (originalHangul === 0 && originalMojibake > 0 && decoded !== fileName) {
+    return decoded;
+  }
+
+  return fileName;
+}
+
 function ensureAppDirectories() {
   fs.mkdirSync(env.uploadDir, { recursive: true });
   fs.mkdirSync(env.dataDir, { recursive: true });
@@ -41,7 +75,7 @@ async function getImageDimensions(filePath) {
 
 async function getDocumentMetadata(filePath, file) {
   const metadata = {
-    fileName: file.originalname,
+    fileName: normalizeUploadFilename(file.originalname),
     fileSize: file.size,
     mimeType: file.mimetype,
     pageCount: 1,
@@ -172,6 +206,7 @@ module.exports = {
   isPdfFile,
   normalizeRoi,
   normalizePageRois,
+  normalizeUploadFilename,
   pageRangeFromConfig,
   sha256File,
 };

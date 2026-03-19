@@ -1,8 +1,46 @@
+const OCR_TEXT_START_TAG = "<ocr_text>";
+const OCR_TEXT_END_TAG = "</ocr_text>";
+
 function stringifyRange(range) {
   return JSON.stringify(range, null, 2);
 }
 
-function buildVisionPrompt({ fileMetadata, config, range }) {
+function joinPromptSegments(segments) {
+  return segments
+    .map((segment) => (typeof segment === "string" ? segment.trim() : ""))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function buildVisionSystemPrompt(systemPrompt, useHardcodedPrompts = true) {
+  if (!useHardcodedPrompts) {
+    return systemPrompt || "";
+  }
+
+  const basePrompt =
+    systemPrompt || "You extract OCR text from document images with high fidelity.";
+
+  return [
+    basePrompt,
+    "",
+    "Hard output rules:",
+    "- Do not describe the image.",
+    "- Do not explain your reasoning or intermediate steps.",
+    "- Do not include introductions, summaries, bullet lists, or markdown fences.",
+    `- Return exactly one ${OCR_TEXT_START_TAG}...${OCR_TEXT_END_TAG} block.`,
+    "- Put only the extracted OCR text inside that block.",
+  ].join("\n");
+}
+
+function buildVisionPrompt({ fileMetadata, config, range, useHardcodedPrompts = true }) {
+  if (!useHardcodedPrompts) {
+    return joinPromptSegments([
+      config.userPrompt,
+      config.extractionRules,
+      config.referenceEnabled ? config.referenceText : "",
+    ]);
+  }
+
   const lines = [
     config.userPrompt || "Extract OCR text from the supplied document image(s).",
     "",
@@ -29,7 +67,13 @@ function buildVisionPrompt({ fileMetadata, config, range }) {
     "- Preserve line breaks when they matter.",
     "- Preserve table-like structure as text where possible.",
     "- Prioritize digit and symbol fidelity.",
-    "- Use [UNCLEAR] when a character cannot be determined."
+    "- Use [UNCLEAR] when a character cannot be determined.",
+    "",
+    "Response format:",
+    `- Start with ${OCR_TEXT_START_TAG}`,
+    `- End with ${OCR_TEXT_END_TAG}`,
+    "- Do not write anything before or after those tags.",
+    "- Do not include explanations, analysis, or commentary.",
   );
 
   return lines.join("\n");
@@ -40,7 +84,28 @@ function buildPostprocessPrompt({
   config,
   upstageResult,
   visionResult,
+  useHardcodedPrompts = true,
 }) {
+  const upstageText =
+    upstageResult?.content?.markdown ||
+    upstageResult?.content?.text ||
+    upstageResult?.text ||
+    "";
+  const visionText = visionResult?.text || "";
+
+  if (!useHardcodedPrompts) {
+    return JSON.stringify(
+      {
+        user_prompt: config.userPrompt || "",
+        upstage_ocr: upstageText,
+        vision_ocr: visionText,
+        reference_text: config.referenceEnabled ? config.referenceText || "" : "",
+      },
+      null,
+      2
+    );
+  }
+
   const lines = [
     config.userPrompt ||
       "Compare the OCR outputs, reconcile differences, and return the best final text.",
@@ -54,13 +119,10 @@ function buildPostprocessPrompt({
     JSON.stringify(visionResult?.range || {}, null, 2),
     "",
     "Upstage OCR result:",
-    upstageResult?.content?.markdown ||
-      upstageResult?.content?.text ||
-      upstageResult?.text ||
-      "",
+    upstageText,
     "",
     "Vision OCR result:",
-    visionResult?.text || "",
+    visionText,
   ];
 
   if (config.referenceEnabled && config.referenceText) {
@@ -80,6 +142,24 @@ function buildPostprocessPrompt({
   );
 
   return lines.join("\n");
+}
+
+function buildPostprocessSystemPrompt(systemPrompt, useHardcodedPrompts = true) {
+  if (!useHardcodedPrompts) {
+    return systemPrompt || "";
+  }
+
+  const basePrompt =
+    systemPrompt || "You reconcile multiple OCR outputs into a clean final text.";
+
+  return [
+    basePrompt,
+    "",
+    "Hard output rules:",
+    "- Return the final merged text only.",
+    "- Do not explain your reasoning.",
+    "- Do not add commentary unless the user explicitly asked for it.",
+  ].join("\n");
 }
 
 function extractAssistantText(responseData) {
@@ -114,8 +194,79 @@ function extractAssistantText(responseData) {
   return JSON.stringify(responseData, null, 2);
 }
 
+function stripThinkBlocks(text) {
+  return String(text || "")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+    .trim();
+}
+
+function extractTaggedText(text, startTag, endTag) {
+  const startIndex = text.indexOf(startTag);
+  const endIndex = text.indexOf(endTag);
+
+  if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
+    return null;
+  }
+
+  return text.slice(startIndex + startTag.length, endIndex).trim();
+}
+
+function looksLikeReasoningLine(line) {
+  const trimmed = line.trim();
+
+  if (!trimmed) {
+    return true;
+  }
+
+  return [
+    /^based on\b/i,
+    /^i (?:will|need|can|should|am going to|must|have to)\b/i,
+    /^let'?s\b/i,
+    /^wait\b/i,
+    /^\d+\.\s/,
+    /^\*\s/,
+    /^-\s/,
+    /^header section\b/i,
+    /^table structure\b/i,
+    /^left column\b/i,
+    /^right column\b/i,
+    /^refining the output\b/i,
+    /^row \d+:/i,
+    /^actually\b/i,
+  ].some((pattern) => pattern.test(trimmed));
+}
+
+function stripLeadingReasoning(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  let index = 0;
+
+  while (index < lines.length && looksLikeReasoningLine(lines[index])) {
+    index += 1;
+  }
+
+  const candidate = lines.slice(index).join("\n").trim();
+  return candidate || String(text || "").trim();
+}
+
+function extractVisionText(responseData) {
+  const rawText = stripThinkBlocks(extractAssistantText(responseData));
+  const taggedText = extractTaggedText(rawText, OCR_TEXT_START_TAG, OCR_TEXT_END_TAG);
+
+  if (taggedText !== null) {
+    return taggedText;
+  }
+
+  return stripLeadingReasoning(rawText);
+}
+
 module.exports = {
+  OCR_TEXT_END_TAG,
+  OCR_TEXT_START_TAG,
+  buildVisionSystemPrompt,
   buildVisionPrompt,
+  buildPostprocessSystemPrompt,
   buildPostprocessPrompt,
   extractAssistantText,
+  extractVisionText,
 };

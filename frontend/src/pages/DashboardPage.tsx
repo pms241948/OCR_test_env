@@ -10,11 +10,15 @@ import { useAppStore } from "../stores/useAppStore";
 import {
   checkUpstageEndpointsApi,
   createPresetApi,
+  deleteHistoryApi,
   deletePresetApi,
   fetchHistoryApi,
   fetchPresetsApi,
   runAllApi,
   runPostprocessApi,
+  testPostprocessCallApi,
+  testUpstageCallApi,
+  testVisionCallApi,
   runUpstageApi,
   runVisionApi,
   updatePresetApi,
@@ -55,6 +59,7 @@ type RunStatus = {
 type RunStatusMap = Record<StageKey, RunStatus>;
 
 const PRESETS_PER_PAGE = 5;
+const HISTORY_PER_PAGE = 5;
 
 function createInitialRunStatus(): RunStatusMap {
   return {
@@ -118,6 +123,32 @@ function Toggle({
   );
 }
 
+function InfoTooltip({ content }: { content: string }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div
+      className="relative inline-flex"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        aria-label="Prompt help"
+        onClick={() => setOpen((current) => !current)}
+        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-300 bg-white text-sm font-semibold text-slate-600 transition hover:border-teal hover:text-teal"
+      >
+        ?
+      </button>
+      {open ? (
+        <div className="absolute right-0 top-full z-20 mt-2 w-80 rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-6 text-slate-600 shadow-panel">
+          {content}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function StatusPill({
   language,
   status,
@@ -156,6 +187,7 @@ function getErrorMessage(error: unknown, language: AppLanguage): string {
             message?: string;
             details?: {
               message?: string;
+              hint?: string;
               remoteStatus?: number;
               remoteData?: unknown;
             };
@@ -164,6 +196,7 @@ function getErrorMessage(error: unknown, language: AppLanguage): string {
       | undefined;
     const baseMessage = payload?.error?.message || error.message;
     const detailMessage = payload?.error?.details?.message;
+    const hintMessage = payload?.error?.details?.hint;
     const remoteStatus = payload?.error?.details?.remoteStatus;
     const remoteData = payload?.error?.details?.remoteData;
 
@@ -172,15 +205,25 @@ function getErrorMessage(error: unknown, language: AppLanguage): string {
         typeof remoteData === "string"
           ? remoteData
           : JSON.stringify(remoteData);
-      return `${baseMessage} (upstream ${remoteStatus}: ${remoteSummary})`;
+      return hintMessage
+        ? `${baseMessage} (upstream ${remoteStatus}: ${remoteSummary}) (${hintMessage})`
+        : `${baseMessage} (upstream ${remoteStatus}: ${remoteSummary})`;
     }
 
     if (remoteStatus) {
-      return `${baseMessage} (upstream ${remoteStatus})`;
+      return hintMessage
+        ? `${baseMessage} (upstream ${remoteStatus}) (${hintMessage})`
+        : `${baseMessage} (upstream ${remoteStatus})`;
     }
 
     if (detailMessage && detailMessage !== baseMessage) {
-      return `${baseMessage} (${detailMessage})`;
+      return hintMessage
+        ? `${baseMessage} (${detailMessage}) (${hintMessage})`
+        : `${baseMessage} (${detailMessage})`;
+    }
+
+    if (hintMessage) {
+      return `${baseMessage} (${hintMessage})`;
     }
 
     return baseMessage;
@@ -284,6 +327,24 @@ function createUploadedDocumentId(file: Pick<File, "name" | "size" | "lastModifi
   return [file.name, file.size, file.lastModified].join("::");
 }
 
+function mergeServerFileMeta(
+  responseFile: FileMeta,
+  fallbackFile: Pick<File, "name" | "size" | "type"> | null,
+  currentMeta: FileMeta | null
+): FileMeta {
+  return {
+    ...(currentMeta || {
+      fileName: fallbackFile?.name || responseFile.fileName,
+      fileSize: fallbackFile?.size || responseFile.fileSize,
+      mimeType: fallbackFile?.type || responseFile.mimeType,
+      pageCount: 1,
+    }),
+    ...responseFile,
+    // Preserve the browser-provided filename for the upload library UI.
+    fileName: fallbackFile?.name || currentMeta?.fileName || responseFile.fileName,
+  };
+}
+
 function clampPage(page: number, pageCount: number): number {
   if (!Number.isFinite(page)) {
     return 1;
@@ -339,9 +400,13 @@ export function DashboardPage() {
   const [activeDocumentId, setActiveDocumentId] = useState<string | null>(null);
   const [previewPage, setPreviewPage] = useState(1);
   const [endpointCheckResult, setEndpointCheckResult] = useState<unknown>(null);
+  const [upstageTestResult, setUpstageTestResult] = useState<unknown>(null);
+  const [visionTestResult, setVisionTestResult] = useState<unknown>(null);
+  const [postprocessTestResult, setPostprocessTestResult] = useState<unknown>(null);
   const [presetName, setPresetName] = useState("");
   const [presetDescription, setPresetDescription] = useState("");
   const [presetPage, setPresetPage] = useState(1);
+  const [historyPage, setHistoryPage] = useState(1);
   const [runStatus, setRunStatus] = useState<RunStatusMap>(createInitialRunStatus());
   const activeDocument = useMemo(
     () => uploadedDocuments.find((document) => document.id === activeDocumentId) || null,
@@ -364,6 +429,11 @@ export function DashboardPage() {
     const start = (presetPage - 1) * PRESETS_PER_PAGE;
     return presets.slice(start, start + PRESETS_PER_PAGE);
   }, [presetPage, presets]);
+  const totalHistoryPages = Math.max(1, Math.ceil(history.length / HISTORY_PER_PAGE));
+  const visibleHistory = useMemo(() => {
+    const start = (historyPage - 1) * HISTORY_PER_PAGE;
+    return history.slice(start, start + HISTORY_PER_PAGE);
+  }, [history, historyPage]);
 
   const roiEnabled =
     visionConfig.rangeMode === "roi" || visionConfig.rangeMode === "page_and_roi";
@@ -395,6 +465,10 @@ export function DashboardPage() {
   useEffect(() => {
     setPresetPage((current) => Math.min(current, totalPresetPages));
   }, [totalPresetPages]);
+
+  useEffect(() => {
+    setHistoryPage((current) => Math.min(current, totalHistoryPages));
+  }, [totalHistoryPages]);
 
   useEffect(() => {
     setPreviewPage((current) => clampPage(current, activePageCount));
@@ -633,15 +707,7 @@ export function DashboardPage() {
       const response = await runUpstageApi(selectedFile, upstageConfig);
       setStageResult("upstage", response);
       if (response.file) {
-        const nextMeta = {
-          ...(activeFileMeta || {
-            fileName: selectedFile.name,
-            fileSize: selectedFile.size,
-            mimeType: selectedFile.type,
-            pageCount: 1,
-          }),
-          ...response.file,
-        };
+        const nextMeta = mergeServerFileMeta(response.file, selectedFile, activeFileMeta);
         setFileMeta(nextMeta);
         if (activeDocumentId) {
           updateUploadedDocumentMeta(activeDocumentId, nextMeta);
@@ -660,15 +726,7 @@ export function DashboardPage() {
       const response = await runVisionApi(selectedFile, visionConfig);
       setStageResult("vision", response);
       if (response.file) {
-        const nextMeta = {
-          ...(activeFileMeta || {
-            fileName: selectedFile.name,
-            fileSize: selectedFile.size,
-            mimeType: selectedFile.type,
-            pageCount: 1,
-          }),
-          ...response.file,
-        };
+        const nextMeta = mergeServerFileMeta(response.file, selectedFile, activeFileMeta);
         setFileMeta(nextMeta);
         if (activeDocumentId) {
           updateUploadedDocumentMeta(activeDocumentId, nextMeta);
@@ -714,17 +772,10 @@ export function DashboardPage() {
 
     await executeStage("pipeline", async () => {
       const response = await runAllApi(selectedFile, currentBundle);
-      setFileMeta(response.file);
+      const nextMeta = mergeServerFileMeta(response.file, selectedFile, activeFileMeta);
+      setFileMeta(nextMeta);
       if (activeDocumentId) {
-        updateUploadedDocumentMeta(activeDocumentId, {
-          ...(activeFileMeta || {
-            fileName: selectedFile.name,
-            fileSize: selectedFile.size,
-            mimeType: selectedFile.type,
-            pageCount: 1,
-          }),
-          ...response.file,
-        });
+        updateUploadedDocumentMeta(activeDocumentId, nextMeta);
       }
       setStageResult("upstage", response.upstage);
       setStageResult("vision", response.vision);
@@ -751,6 +802,35 @@ export function DashboardPage() {
       setEndpointCheckResult(response);
     } catch (error) {
       setEndpointCheckResult({ error: getErrorMessage(error, language) });
+    }
+  }
+
+  async function handleTestUpstageCall() {
+    try {
+      const response = await testUpstageCallApi(upstageConfig);
+      setUpstageTestResult(response);
+    } catch (error) {
+      setUpstageTestResult({ error: getErrorMessage(error, language) });
+    }
+  }
+
+  async function handleTestVisionCall() {
+    try {
+      const response = await testVisionCallApi(visionConfig);
+      setVisionTestResult(response);
+    } catch (error) {
+      setVisionTestResult({ error: getErrorMessage(error, language) });
+    }
+  }
+
+  async function handleTestPostprocessCall() {
+    try {
+      const response = await testPostprocessCallApi({
+        config: postprocessConfig,
+      });
+      setPostprocessTestResult(response);
+    } catch (error) {
+      setPostprocessTestResult({ error: getErrorMessage(error, language) });
     }
   }
 
@@ -800,6 +880,11 @@ export function DashboardPage() {
 
   async function handleDeletePreset(id: number) {
     await deletePresetApi(id);
+    await refreshSidebarData();
+  }
+
+  async function handleDeleteHistory(id: number) {
+    await deleteHistoryApi(id);
     await refreshSidebarData();
   }
 
@@ -893,6 +978,9 @@ export function DashboardPage() {
     resetConfigs();
     resetResults();
     setEndpointCheckResult(null);
+    setUpstageTestResult(null);
+    setVisionTestResult(null);
+    setPostprocessTestResult(null);
     setRunStatus(createInitialRunStatus());
   }
 
@@ -1130,10 +1218,21 @@ export function DashboardPage() {
           >
             {t("button.check_endpoints")}
           </button>
+          <button
+            type="button"
+            className="rounded-full border border-slate-300 bg-white px-5 py-3 text-sm font-medium text-slate-700 transition hover:border-teal hover:text-teal"
+            onClick={() => void handleTestUpstageCall()}
+          >
+            {t("button.check_connection")}
+          </button>
         </div>
+        <p className="text-xs text-slate-500">{t("json.connection_note")}</p>
 
         {endpointCheckResult ? (
           <JsonViewer label={t("json.endpoint_check")} data={endpointCheckResult} />
+        ) : null}
+        {upstageTestResult ? (
+          <JsonViewer label={t("json.upstage_test")} data={upstageTestResult} />
         ) : null}
       </SectionCard>
 
@@ -1190,6 +1289,15 @@ export function DashboardPage() {
             value={String(visionConfig.topP)}
             onChange={(event) => updateVisionConfig({ topP: Number(event.target.value || 0) })}
           />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Toggle
+            checked={visionConfig.useHardcodedPrompts}
+            onChange={(checked) => updateVisionConfig({ useHardcodedPrompts: checked })}
+            label={t("toggle.use_hardcoded_prompts")}
+          />
+          <InfoTooltip content={t("help.vision_hardcoded_prompts")} />
         </div>
 
         <TextareaField
@@ -1249,6 +1357,21 @@ export function DashboardPage() {
             className="min-h-24 font-mono"
           />
         </div>
+
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            className="rounded-full border border-slate-300 bg-white px-5 py-3 text-sm font-medium text-slate-700 transition hover:border-teal hover:text-teal"
+            onClick={() => void handleTestVisionCall()}
+          >
+            {t("button.check_connection")}
+          </button>
+        </div>
+        <p className="text-xs text-slate-500">{t("json.connection_note")}</p>
+
+        {visionTestResult ? (
+          <JsonViewer label={t("json.vision_test")} data={visionTestResult} />
+        ) : null}
       </SectionCard>
 
       <SectionCard title={t("section.scope.title")} subtitle={t("section.scope.subtitle")}>
@@ -1420,6 +1543,15 @@ export function DashboardPage() {
           />
         </div>
 
+        <div className="flex flex-wrap items-center gap-3">
+          <Toggle
+            checked={postprocessConfig.useHardcodedPrompts}
+            onChange={(checked) => updatePostprocessConfig({ useHardcodedPrompts: checked })}
+            label={t("toggle.use_hardcoded_prompts")}
+          />
+          <InfoTooltip content={t("help.postprocess_hardcoded_prompts")} />
+        </div>
+
         <TextareaField
           label={t("field.system_prompt")}
           value={postprocessConfig.systemPrompt}
@@ -1471,6 +1603,21 @@ export function DashboardPage() {
             className="min-h-24 font-mono"
           />
         </div>
+
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            className="rounded-full border border-slate-300 bg-white px-5 py-3 text-sm font-medium text-slate-700 transition hover:border-teal hover:text-teal"
+            onClick={() => void handleTestPostprocessCall()}
+          >
+            {t("button.check_connection")}
+          </button>
+        </div>
+        <p className="text-xs text-slate-500">{t("json.connection_note")}</p>
+
+        {postprocessTestResult ? (
+          <JsonViewer label={t("json.postprocess_test")} data={postprocessTestResult} />
+        ) : null}
       </SectionCard>
     </div>
   );
@@ -1634,7 +1781,7 @@ export function DashboardPage() {
               {t("history.empty")}
             </div>
           ) : (
-            history.map((item) => (
+            visibleHistory.map((item) => (
               <div
                 key={item.id}
                 className="rounded-[24px] border border-slate-200 bg-slate-50 p-4"
@@ -1649,13 +1796,22 @@ export function DashboardPage() {
                       {formatHistoryMeta(language, item)}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleLoadHistory(item)}
-                    className="rounded-full border border-slate-300 px-4 py-2 text-xs font-medium text-slate-700 transition hover:border-teal hover:text-teal"
-                  >
-                    {t("button.load_result")}
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleLoadHistory(item)}
+                      className="rounded-full border border-slate-300 px-4 py-2 text-xs font-medium text-slate-700 transition hover:border-teal hover:text-teal"
+                    >
+                      {t("button.load_result")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleDeleteHistory(item.id)}
+                      className="rounded-full border border-red-200 px-4 py-2 text-xs font-medium text-red-600 transition hover:bg-red-50"
+                    >
+                      {t("button.delete")}
+                    </button>
+                  </div>
                 </div>
                 {item.roi ? (
                   <p className="mt-3 text-xs text-slate-500">
@@ -1667,6 +1823,41 @@ export function DashboardPage() {
             ))
           )}
         </div>
+
+        {history.length > HISTORY_PER_PAGE ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setHistoryPage((current) => Math.max(1, current - 1))}
+              disabled={historyPage === 1}
+              className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-teal hover:text-teal disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {"<"}
+            </button>
+            {Array.from({ length: totalHistoryPages }, (_, index) => index + 1).map((page) => (
+              <button
+                key={page}
+                type="button"
+                onClick={() => setHistoryPage(page)}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                  page === historyPage
+                    ? "bg-teal text-white"
+                    : "border border-slate-300 bg-white text-slate-700 hover:border-teal hover:text-teal"
+                }`}
+              >
+                {page}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setHistoryPage((current) => Math.min(totalHistoryPages, current + 1))}
+              disabled={historyPage === totalHistoryPages}
+              className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-teal hover:text-teal disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {">"}
+            </button>
+          </div>
+        ) : null}
       </SectionCard>
     </div>
   );

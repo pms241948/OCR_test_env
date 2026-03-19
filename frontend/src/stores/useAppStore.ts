@@ -30,6 +30,7 @@ const defaultVisionConfig: VisionConfig = {
   url: "",
   apiKey: "",
   model: "",
+  useHardcodedPrompts: true,
   systemPrompt: "You are an OCR assistant that extracts text with high fidelity.",
   userPrompt: "Extract the document text accurately.",
   extractionRules:
@@ -60,6 +61,7 @@ const defaultPostprocessConfig: PostprocessConfig = {
   url: "",
   apiKey: "",
   model: "",
+  useHardcodedPrompts: true,
   systemPrompt: "You merge OCR outputs into the cleanest possible final text.",
   userPrompt: "Compare both OCR results and produce a refined final text.",
   temperature: 0.1,

@@ -78,6 +78,31 @@ async function validateTargetUrl(input) {
   return parsed.toString();
 }
 
+function normalizeOpenAiChatUrl(input) {
+  let parsed;
+
+  try {
+    parsed = new URL(input);
+  } catch (_error) {
+    return input;
+  }
+
+  const path = parsed.pathname || "/";
+
+  if (path === "/" || path === "") {
+    parsed.pathname = "/v1/chat/completions";
+    return parsed.toString();
+  }
+
+  if (path === "/v1" || path === "/v1/") {
+    parsed.pathname = "/v1/chat/completions";
+    return parsed.toString();
+  }
+
+  return parsed.toString();
+}
+
 module.exports = {
+  normalizeOpenAiChatUrl,
   validateTargetUrl,
 };

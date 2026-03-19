@@ -1,6 +1,7 @@
 const Database = require("better-sqlite3");
 
 const { env } = require("../utils/env");
+const { normalizeUploadFilename } = require("../utils/file");
 
 let db;
 
@@ -105,6 +106,11 @@ function deletePresetRecord(id) {
   getDb().prepare("DELETE FROM presets WHERE id = ?").run(id);
 }
 
+function deleteHistoryEntry(id) {
+  const result = getDb().prepare("DELETE FROM history WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
 function addHistoryEntry({
   runType,
   fileName,
@@ -137,7 +143,7 @@ function addHistoryEntry({
     )
     .run(
       runType,
-      fileName,
+      normalizeUploadFilename(fileName),
       fileHash,
       mimeType,
       fileSize,
@@ -151,14 +157,16 @@ function addHistoryEntry({
   return insert.lastInsertRowid;
 }
 
-function listHistoryEntries(limit = 20) {
-  return getDb()
-    .prepare("SELECT * FROM history ORDER BY created_at DESC LIMIT ?")
-    .all(limit)
-    .map((row) => ({
+function listHistoryEntries(limit = null) {
+  const query =
+    Number.isInteger(limit) && limit > 0
+      ? getDb().prepare("SELECT * FROM history ORDER BY created_at DESC LIMIT ?").all(limit)
+      : getDb().prepare("SELECT * FROM history ORDER BY created_at DESC").all();
+
+  return query.map((row) => ({
       id: row.id,
       runType: row.run_type,
-      fileName: row.file_name,
+      fileName: normalizeUploadFilename(row.file_name),
       fileHash: row.file_hash,
       mimeType: row.mime_type,
       fileSize: row.file_size,
@@ -176,6 +184,7 @@ module.exports = {
   createPresetRecord,
   updatePresetRecord,
   deletePresetRecord,
+  deleteHistoryEntry,
   addHistoryEntry,
   listHistoryEntries,
 };

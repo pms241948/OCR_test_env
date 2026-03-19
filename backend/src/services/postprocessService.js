@@ -1,8 +1,12 @@
 const { AppError } = require("../utils/errors");
-const { requestJson } = require("../utils/http");
+const { requestJson, requestJsonAllowAnyStatus } = require("../utils/http");
 const { parseJsonField } = require("../utils/parsing");
-const { buildPostprocessPrompt, extractAssistantText } = require("../utils/prompt");
-const { validateTargetUrl } = require("../utils/urlValidator");
+const {
+  buildPostprocessPrompt,
+  buildPostprocessSystemPrompt,
+  extractAssistantText,
+} = require("../utils/prompt");
+const { normalizeOpenAiChatUrl, validateTargetUrl } = require("../utils/urlValidator");
 
 async function runPostprocessLlm({
   config,
@@ -10,7 +14,8 @@ async function runPostprocessLlm({
   upstageResult,
   visionResult,
 }) {
-  const url = config.url;
+  const url = normalizeOpenAiChatUrl(config.url);
+  const useHardcodedPrompts = config.useHardcodedPrompts !== false;
 
   if (!url) {
     throw new AppError("후처리 LLM 호출 URL이 필요합니다.", 400);
@@ -26,26 +31,34 @@ async function runPostprocessLlm({
   const retryCount = Number(config.retryCount || 1);
   const extraHeaders = parseJsonField(config.headersJson, {});
   const extraBody = parseJsonField(config.extraBodyJson, {});
+  const effectiveSystemPrompt = buildPostprocessSystemPrompt(
+    config.systemPrompt,
+    useHardcodedPrompts
+  );
+  const compiledPrompt = buildPostprocessPrompt({
+    fileMetadata,
+    config,
+    upstageResult,
+    visionResult,
+    useHardcodedPrompts,
+  });
+  const messages = [];
+
+  if (effectiveSystemPrompt) {
+    messages.push({
+      role: "system",
+      content: effectiveSystemPrompt,
+    });
+  }
+
+  messages.push({
+    role: "user",
+    content: compiledPrompt,
+  });
 
   const payload = {
     model: config.model,
-    messages: [
-      {
-        role: "system",
-        content:
-          config.systemPrompt ||
-          "You reconcile multiple OCR outputs into a clean final text.",
-      },
-      {
-        role: "user",
-        content: buildPostprocessPrompt({
-          fileMetadata,
-          config,
-          upstageResult,
-          visionResult,
-        }),
-      },
-    ],
+    messages,
     temperature: Number(config.temperature ?? 0.1),
     max_tokens: Number(config.maxTokens || 4000),
     top_p: Number(config.topP ?? 1),
@@ -80,11 +93,9 @@ async function runPostprocessLlm({
       payload,
     },
     usedPrompt: {
-      systemPrompt:
-        config.systemPrompt ||
-        "You reconcile multiple OCR outputs into a clean final text.",
+      systemPrompt: effectiveSystemPrompt,
       userPrompt: config.userPrompt || "",
-      compiledPrompt: payload.messages[1].content,
+      compiledPrompt,
     },
     usedReferenceText: config.referenceEnabled ? config.referenceText || "" : "",
     raw: response.data,
@@ -92,6 +103,74 @@ async function runPostprocessLlm({
   };
 }
 
+async function testPostprocessConnection(config) {
+  const url = normalizeOpenAiChatUrl(config.url);
+
+  if (!url) {
+    throw new AppError("Postprocess connection test URL is required.", 400);
+  }
+
+  if (!config.model) {
+    throw new AppError("Postprocess connection test model is required.", 400);
+  }
+
+  await validateTargetUrl(url);
+
+  const timeoutMs = Number(config.timeoutMs || 30000);
+  const extraHeaders = parseJsonField(config.headersJson, {});
+  const extraBody = parseJsonField(config.extraBodyJson, {});
+  const payload = {
+    model: config.model,
+    messages: [
+      {
+        role: "system",
+        content: "You are a connection test. Reply with OK only.",
+      },
+      {
+        role: "user",
+        content: "OK",
+      },
+    ],
+    temperature: 0,
+    max_tokens: 8,
+    top_p: 1,
+    ...extraBody,
+  };
+  const headers = {
+    "Content-Type": "application/json",
+    ...extraHeaders,
+  };
+
+  if (config.apiKey) {
+    headers.Authorization = `Bearer ${config.apiKey}`;
+  }
+
+  const response = await requestJsonAllowAnyStatus({
+    method: "POST",
+    url,
+    headers,
+    data: payload,
+    timeoutMs,
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
+  });
+
+  return {
+    stage: "postprocess_connection",
+    ok: response.status >= 200 && response.status < 300,
+    reachable: true,
+    statusCode: response.status,
+    request: {
+      url,
+      payload,
+      note: "Connection check sends a minimal chat request and does not run postprocess reconciliation.",
+    },
+    raw: response.data,
+    text: extractAssistantText(response.data),
+  };
+}
+
 module.exports = {
   runPostprocessLlm,
+  testPostprocessConnection,
 };

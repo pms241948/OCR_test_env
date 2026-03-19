@@ -1,6 +1,7 @@
 const {
   addHistoryEntry,
   createPresetRecord,
+  deleteHistoryEntry,
   deletePresetRecord,
   listHistoryEntries,
   listPresetRecords,
@@ -13,9 +14,10 @@ const { sanitizeConfigForStorage } = require("../utils/storageSanitizer");
 const {
   checkEndpoints,
   runUpstageDocumentParse,
+  testUpstageConnection,
 } = require("../services/upstageService");
-const { runVisionOcr } = require("../services/visionLlmService");
-const { runPostprocessLlm } = require("../services/postprocessService");
+const { runVisionOcr, testVisionConnection } = require("../services/visionLlmService");
+const { runPostprocessLlm, testPostprocessConnection } = require("../services/postprocessService");
 const { runFullPipeline } = require("../services/pipelineService");
 
 function requireFile(file) {
@@ -26,6 +28,14 @@ function requireFile(file) {
 
 function getMultipartConfig(req) {
   return parseJsonField(req.body.config, {});
+}
+
+function previewText(value, maxLength = 500) {
+  if (!value) {
+    return "";
+  }
+
+  return String(value).slice(0, maxLength);
 }
 
 async function buildFileContext(file) {
@@ -139,6 +149,35 @@ async function runVisionLlm(req, res) {
   }
 }
 
+async function testUpstageCall(req, res) {
+  const result = await testUpstageConnection(req.body || {});
+
+  res.json({
+    success: true,
+    data: {
+      ...result,
+      preview: {
+        text: previewText(JSON.stringify(result.raw || {}, null, 2)),
+      },
+    },
+  });
+}
+
+async function testVisionCall(req, res) {
+  const result = await testVisionConnection(req.body || {});
+
+  res.json({
+    success: true,
+    data: {
+      ...result,
+      preview: {
+        textLength: (result.text || "").length,
+        text: previewText(result.text || ""),
+      },
+    },
+  });
+}
+
 async function runPostprocess(req, res) {
   const body = req.body || {};
   const config = body.config || {};
@@ -174,6 +213,21 @@ async function runPostprocess(req, res) {
     data: {
       historyId,
       ...result,
+    },
+  });
+}
+
+async function testPostprocessCall(req, res) {
+  const result = await testPostprocessConnection((req.body || {}).config || {});
+
+  res.json({
+    success: true,
+    data: {
+      ...result,
+      preview: {
+        textLength: (result.text || "").length,
+        text: previewText(result.text || ""),
+      },
     },
   });
 }
@@ -224,7 +278,13 @@ async function checkUpstageEndpoints(req, res) {
 }
 
 async function listHistory(req, res) {
-  const limit = Number(req.query.limit || 20);
+  const limit =
+    typeof req.query.limit === "undefined" ? null : Number(req.query.limit);
+
+  if (limit !== null && (!Number.isFinite(limit) || limit < 1)) {
+    throw new AppError("History limit must be a positive number.", 400);
+  }
+
   const items = listHistoryEntries(limit);
 
   res.json({
@@ -248,6 +308,25 @@ async function createHistoryEntry(req, res) {
   });
 
   res.status(201).json({
+    success: true,
+    data: { id },
+  });
+}
+
+async function deleteHistory(req, res) {
+  const id = Number(req.params.id);
+
+  if (!id) {
+    throw new AppError("A valid history ID is required.", 400);
+  }
+
+  const deleted = deleteHistoryEntry(id);
+
+  if (!deleted) {
+    throw new AppError("History record was not found.", 404);
+  }
+
+  res.json({
     success: true,
     data: { id },
   });
@@ -319,11 +398,15 @@ module.exports = {
   health,
   runUpstage,
   runVisionLlm,
+  testUpstageCall,
+  testVisionCall,
   runPostprocess,
+  testPostprocessCall,
   runAll,
   checkUpstageEndpoints,
   listHistory,
   createHistoryEntry,
+  deleteHistory,
   listPresets,
   createPreset,
   updatePreset,

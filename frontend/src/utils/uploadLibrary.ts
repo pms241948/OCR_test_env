@@ -59,7 +59,10 @@ function toUploadedDocument(document: PersistedUploadedDocument): UploadedDocume
   return {
     id: document.id,
     file: document.file,
-    meta: document.meta,
+    meta: {
+      ...document.meta,
+      fileName: document.file?.name || document.meta.fileName,
+    },
   };
 }
 
