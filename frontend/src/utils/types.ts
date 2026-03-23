@@ -66,11 +66,21 @@ export type VisionConfig = LlmBaseConfig & {
   pageRois?: PageRoiMap;
 };
 
+export type VisionModelConfig = VisionConfig & {
+  id: string;
+  label: string;
+};
+
+export type VisionRegistry = {
+  activeModelId: string;
+  models: VisionModelConfig[];
+};
+
 export type PostprocessConfig = LlmBaseConfig;
 
 export type StoredConfigBundle = {
   upstage: UpstageConfig;
-  vision: VisionConfig;
+  vision: VisionRegistry;
   postprocess: PostprocessConfig;
 };
 
@@ -126,6 +136,13 @@ export type StageResponse = {
   elements?: unknown[];
   usage?: unknown;
   pageCount?: number | null;
+};
+
+export type VisionModelResult = StageResponse & {
+  modelId: string;
+  modelLabel: string;
+  modelUrl: string;
+  errorMessage?: string;
 };
 
 export type StageKey = "upstage" | "vision" | "postprocess" | "pipeline";

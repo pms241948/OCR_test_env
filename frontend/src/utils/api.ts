@@ -7,7 +7,7 @@ import type {
   StageResponse,
   StoredConfigBundle,
   UpstageConfig,
-  VisionConfig,
+  VisionModelConfig,
   FileMeta,
 } from "./types";
 
@@ -32,7 +32,7 @@ export async function testUpstageCallApi(config: UpstageConfig): Promise<unknown
   return unwrap(response);
 }
 
-export async function runVisionApi(file: File, config: VisionConfig): Promise<StageResponse> {
+export async function runVisionApi(file: File, config: VisionModelConfig): Promise<StageResponse> {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("config", JSON.stringify(config));
@@ -40,7 +40,7 @@ export async function runVisionApi(file: File, config: VisionConfig): Promise<St
   return unwrap<{ file: FileMeta } & StageResponse>(response);
 }
 
-export async function testVisionCallApi(config: VisionConfig): Promise<unknown> {
+export async function testVisionCallApi(config: VisionModelConfig): Promise<unknown> {
   const response = await api.post("/ocr/vision-llm/test-call", config);
   return unwrap(response);
 }

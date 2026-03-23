@@ -6,7 +6,12 @@ import { JsonViewer } from "../components/JsonViewer";
 import { ResultPane } from "../components/ResultPane";
 import { RoiSelector } from "../components/RoiSelector";
 import { SectionCard } from "../components/SectionCard";
-import { useAppStore } from "../stores/useAppStore";
+import {
+  createVisionModelConfig,
+  getVisionModelDisplayLabel,
+  normalizeVisionRegistry,
+  useAppStore,
+} from "../stores/useAppStore";
 import {
   checkUpstageEndpointsApi,
   createPresetApi,
@@ -49,6 +54,9 @@ import type {
   StageResponse,
   StoredConfigBundle,
   UploadedDocument,
+  VisionModelConfig,
+  VisionModelResult,
+  VisionRegistry,
 } from "../utils/types";
 
 type RunStatus = {
@@ -57,9 +65,28 @@ type RunStatus = {
 };
 
 type RunStatusMap = Record<StageKey, RunStatus>;
+type ResultWorkspaceView = "compare" | "upstage" | "vision" | "postprocess" | "insights";
+type CompareWorkspaceMode = "upstage_vision" | "vision_postprocess" | "upstage_postprocess" | "all";
+type ResultWorkspaceStage = Exclude<StageKey, "pipeline">;
+type WorkspaceMenuKey = "document" | "ocr_setup" | "run_center" | "results" | "library";
+type OcrSetupView = "upstage" | "vision" | "postprocess";
+type ResultPaneData = {
+  title: string;
+  text: string;
+  raw: unknown;
+  statusCode?: number;
+  promptPreview?: string;
+  referencePreview?: string;
+  errorMessage?: string;
+};
 
 const PRESETS_PER_PAGE = 5;
 const HISTORY_PER_PAGE = 5;
+const ACTIVE_TAB_CLASS = "bg-ink text-white shadow-sm";
+const ACTIVE_PILL_CLASS = "border-ink bg-ink text-white shadow-sm";
+const INACTIVE_TAB_CLASS =
+  "border border-slate-300 bg-white text-slate-700 hover:border-ink hover:text-ink";
+const INACTIVE_PILL_CLASS = "border-slate-300 bg-white text-slate-700 hover:border-ink";
 
 function createInitialRunStatus(): RunStatusMap {
   return {
@@ -113,8 +140,8 @@ function Toggle({
       onClick={() => onChange(!checked)}
       className={`flex items-center gap-3 rounded-full border px-4 py-2 text-sm font-medium transition ${
         checked
-          ? "border-teal bg-teal text-white"
-          : "border-slate-300 bg-white text-slate-700 hover:border-teal"
+          ? ACTIVE_PILL_CLASS
+          : INACTIVE_PILL_CLASS
       }`}
     >
       <span className={`h-2.5 w-2.5 rounded-full ${checked ? "bg-white" : "bg-slate-300"}`} />
@@ -252,9 +279,41 @@ function resolveUpstageText(result: StageResponse | null): string {
   return result.content?.markdown || result.content?.text || result.content?.html || "";
 }
 
+function buildVisionResultTitle(language: AppLanguage, model: VisionModelConfig): string {
+  const prefix = translate(language, "results.vision");
+  return `${prefix} · ${getVisionModelDisplayLabel(model)}`;
+}
+
+function buildVisionResult(
+  model: VisionModelConfig,
+  result: StageResponse | null,
+  errorMessage?: string
+): VisionModelResult {
+  return {
+    ...(result || {}),
+    statusCode: result?.statusCode ?? 0,
+    modelId: model.id,
+    modelLabel: getVisionModelDisplayLabel(model),
+    modelUrl: model.url,
+    errorMessage,
+  };
+}
+
+function coerceVisionResult(
+  input: unknown,
+  model: VisionModelConfig | null | undefined
+): VisionModelResult | null {
+  if (!model || !input || typeof input !== "object") {
+    return null;
+  }
+
+  const result = input as StageResponse & { errorMessage?: string };
+  return buildVisionResult(model, result, result.errorMessage);
+}
+
 function buildBundle(config: {
   upstage: ReturnType<typeof useAppStore.getState>["upstageConfig"];
-  vision: ReturnType<typeof useAppStore.getState>["visionConfig"];
+  vision: ReturnType<typeof useAppStore.getState>["visionRegistry"];
   postprocess: ReturnType<typeof useAppStore.getState>["postprocessConfig"];
 }): StoredConfigBundle {
   return {
@@ -269,9 +328,13 @@ function coerceBundle(input: unknown): StoredConfigBundle | null {
     return null;
   }
 
-  const maybeBundle = input as Partial<StoredConfigBundle>;
+  const maybeBundle = input as Partial<StoredConfigBundle> & { vision?: unknown };
   if (maybeBundle.upstage && maybeBundle.vision && maybeBundle.postprocess) {
-    return maybeBundle as StoredConfigBundle;
+    return {
+      upstage: maybeBundle.upstage as StoredConfigBundle["upstage"],
+      vision: normalizeVisionRegistry(maybeBundle.vision),
+      postprocess: maybeBundle.postprocess as StoredConfigBundle["postprocess"],
+    };
   }
 
   return null;
@@ -377,17 +440,23 @@ export function DashboardPage() {
     language,
     setLanguage,
     upstageConfig,
-    visionConfig,
+    visionRegistry,
     postprocessConfig,
     fileMeta,
     results,
     presets,
     history,
     updateUpstageConfig,
-    updateVisionConfig,
+    setVisionRegistry,
+    updateVisionModel,
+    addVisionModel,
+    cloneVisionModel,
+    removeVisionModel,
+    setActiveVisionModel,
     updatePostprocessConfig,
     setFileMeta,
     setStageResult,
+    setVisionResults,
     resetResults,
     setPresets,
     setHistory,
@@ -401,29 +470,219 @@ export function DashboardPage() {
   const [previewPage, setPreviewPage] = useState(1);
   const [endpointCheckResult, setEndpointCheckResult] = useState<unknown>(null);
   const [upstageTestResult, setUpstageTestResult] = useState<unknown>(null);
-  const [visionTestResult, setVisionTestResult] = useState<unknown>(null);
+  const [visionTestResults, setVisionTestResults] = useState<Record<string, unknown>>({});
   const [postprocessTestResult, setPostprocessTestResult] = useState<unknown>(null);
   const [presetName, setPresetName] = useState("");
   const [presetDescription, setPresetDescription] = useState("");
   const [presetPage, setPresetPage] = useState(1);
   const [historyPage, setHistoryPage] = useState(1);
   const [runStatus, setRunStatus] = useState<RunStatusMap>(createInitialRunStatus());
+  const [resultsView, setResultsView] = useState<ResultWorkspaceView>("compare");
+  const [compareMode] = useState<CompareWorkspaceMode>("all");
+  const [ocrSetupView, setOcrSetupView] = useState<OcrSetupView>("upstage");
+  const [activeWorkspaceSection, setActiveWorkspaceSection] = useState<WorkspaceMenuKey>("document");
+  const [isWorkspaceMenuCollapsed, setIsWorkspaceMenuCollapsed] = useState(false);
   const activeDocument = useMemo(
     () => uploadedDocuments.find((document) => document.id === activeDocumentId) || null,
     [activeDocumentId, uploadedDocuments]
   );
   const selectedFile = activeDocument?.file || null;
   const activeFileMeta = activeDocument?.meta || fileMeta;
+  const activeVisionModel = useMemo(
+    () =>
+      visionRegistry.models.find((model) => model.id === visionRegistry.activeModelId) ||
+      visionRegistry.models[0] ||
+      null,
+    [visionRegistry]
+  );
+  const visionConfig = activeVisionModel || createVisionModelConfig();
+  const activeVisionResult = activeVisionModel ? results.vision[activeVisionModel.id] || null : null;
+  const activeVisionTestResult = activeVisionModel
+    ? visionTestResults[activeVisionModel.id] || null
+    : null;
+  const activeVisionDisplayLabel = getVisionModelDisplayLabel(activeVisionModel);
 
   const currentBundle = useMemo(
     () =>
       buildBundle({
         upstage: upstageConfig,
-        vision: visionConfig,
+        vision: visionRegistry,
         postprocess: postprocessConfig,
       }),
-    [postprocessConfig, upstageConfig, visionConfig]
+    [postprocessConfig, upstageConfig, visionRegistry]
   );
+  const resultsWorkspaceSubtitle =
+    language === "ko"
+      ? "등록한 Vision 모델 응답을 함께 비교하거나, 단계별 결과를 크게 확인할 수 있습니다."
+      : "Review registered Vision model responses together or open each stage in a larger workspace.";
+  const workspaceTabs: Array<{ key: ResultWorkspaceView; label: string }> = [
+    {
+      key: "compare",
+      label: language === "ko" ? "비교 화면" : "Compare",
+    },
+    {
+      key: "upstage",
+      label: t("results.upstage"),
+    },
+    {
+      key: "vision",
+      label: t("results.vision"),
+    },
+    {
+      key: "postprocess",
+      label: t("results.postprocess"),
+    },
+    {
+      key: "insights",
+      label: language === "ko" ? "진단 정보" : "Diagnostics",
+    },
+  ];
+  const resultPaneMap: Record<ResultWorkspaceStage, ResultPaneData> = {
+    upstage: {
+      title: t("results.upstage"),
+      text: resolveUpstageText(results.upstage),
+      raw: results.upstage?.raw,
+      statusCode: results.upstage?.statusCode,
+      errorMessage: runStatus.upstage.state === "error" ? runStatus.upstage.message : undefined,
+    },
+    vision: {
+      title: activeVisionModel
+        ? buildVisionResultTitle(language, activeVisionModel)
+        : t("results.vision"),
+      text: activeVisionResult?.text || "",
+      raw: activeVisionResult?.raw,
+      statusCode: activeVisionResult?.statusCode,
+      promptPreview: activeVisionResult?.usedPrompt?.compiledPrompt,
+      referencePreview: activeVisionResult?.usedReferenceText,
+      errorMessage: activeVisionResult?.errorMessage,
+    },
+    postprocess: {
+      title: t("results.postprocess"),
+      text: results.postprocess?.text || "",
+      raw: results.postprocess?.raw,
+      statusCode: results.postprocess?.statusCode,
+      promptPreview: results.postprocess?.usedPrompt?.compiledPrompt,
+      referencePreview: results.postprocess?.usedReferenceText,
+      errorMessage:
+        runStatus.postprocess.state === "error" ? runStatus.postprocess.message : undefined,
+    },
+  };
+  /*
+  const compareModeTabs: Array<{ key: CompareWorkspaceMode; label: string }> = [
+    {
+      key: "upstage_vision",
+      label: `${t("results.upstage")} vs ${t("results.vision")}`,
+    },
+    {
+      key: "vision_postprocess",
+      label: `${t("results.vision")} vs ${t("results.postprocess")}`,
+    },
+    {
+      key: "upstage_postprocess",
+      label: `${t("results.upstage")} vs ${t("results.postprocess")}`,
+    },
+    {
+      key: "all",
+      label: language === "ko" ? "전체 3종" : "All Three",
+    },
+  ];
+  const comparePaneKeys: ResultWorkspaceStage[] =
+    compareMode === "upstage_vision"
+      ? ["upstage", "vision"]
+      : compareMode === "vision_postprocess"
+        ? ["vision", "postprocess"]
+        : compareMode === "upstage_postprocess"
+          ? ["upstage", "postprocess"]
+          : ["upstage", "vision", "postprocess"];
+  */
+  const visionPaneEntries = visionRegistry.models.map((model) => {
+    const result = results.vision[model.id] || null;
+    return {
+      model,
+      pane: {
+        title: buildVisionResultTitle(language, model),
+        text: result?.text || "",
+        raw: result?.raw,
+        statusCode: result?.statusCode,
+        promptPreview: result?.usedPrompt?.compiledPrompt,
+        referencePreview: result?.usedReferenceText,
+        errorMessage: result?.errorMessage,
+      } satisfies ResultPaneData,
+    };
+  });
+  const comparePanes: ResultPaneData[] = [
+    resultPaneMap.upstage,
+    ...visionPaneEntries.map((entry) => entry.pane),
+    resultPaneMap.postprocess,
+  ];
+  const ocrSetupTabs: Array<{ key: OcrSetupView; label: string }> = [
+    {
+      key: "upstage",
+      label: t("section.upstage.title"),
+    },
+    {
+      key: "vision",
+      label: t("section.vision.title"),
+    },
+    {
+      key: "postprocess",
+      label: t("section.postprocess.title"),
+    },
+  ];
+  const focusedPaneKey: ResultWorkspaceStage | null =
+    resultsView === "upstage" || resultsView === "postprocess" ? resultsView : null;
+  const focusedPane = focusedPaneKey ? resultPaneMap[focusedPaneKey] : null;
+  const workspaceMenuItems: Array<{
+    key: WorkspaceMenuKey;
+    step: string;
+    label: string;
+    description: string;
+  }> = [
+    {
+      key: "document",
+      step: "01",
+      label: t("section.file.title"),
+      description:
+        activeFileMeta?.fileName ||
+        (language === "ko" ? "업로드 파일과 미리보기를 관리합니다." : "Manage uploads and previews."),
+    },
+    {
+      key: "ocr_setup",
+      step: "02",
+      label: language === "ko" ? "OCR 설정" : "OCR Setup",
+      description:
+        language === "ko"
+          ? "Upstage, Vision, ROI, Postprocess를 한 흐름으로 조정합니다."
+          : "Tune Upstage, Vision, ROI, and postprocess in one workflow.",
+    },
+    {
+      key: "run_center",
+      step: "03",
+      label: t("section.run_controls.title"),
+      description:
+        language === "ko"
+          ? "단계별 실행과 상태를 확인합니다."
+          : "Run each stage and monitor status.",
+    },
+    {
+      key: "results",
+      step: "04",
+      label: t("section.results.title"),
+      description:
+        language === "ko"
+          ? "결과 비교와 원본 응답 확인 화면입니다."
+          : "Open the comparison workspace and raw outputs.",
+    },
+    {
+      key: "library",
+      step: "05",
+      label: language === "ko" ? "프리셋 & 히스토리" : "Presets & History",
+      description:
+        language === "ko"
+          ? `프리셋 ${presets.length}개 · 히스토리 ${history.length}건`
+          : `${presets.length} presets · ${history.length} history items`,
+    },
+  ];
   const totalPresetPages = Math.max(1, Math.ceil(presets.length / PRESETS_PER_PAGE));
   const visiblePresets = useMemo(() => {
     const start = (presetPage - 1) * PRESETS_PER_PAGE;
@@ -508,33 +767,83 @@ export function DashboardPage() {
     }
   }
 
+  function updateActiveVisionConfig(patch: Partial<VisionModelConfig>) {
+    if (!activeVisionModel) {
+      return;
+    }
+
+    updateVisionModel(activeVisionModel.id, patch);
+  }
+
+  function handleSelectVisionModel(modelId: string) {
+    const model = visionRegistry.models.find((entry) => entry.id === modelId);
+    if (!model) {
+      return;
+    }
+
+    setActiveVisionModel(model.id);
+    setPreviewPage(clampPage(model.roi.page || model.pageRangeStart || 1, activePageCount));
+  }
+
+  function handleAddVisionModel() {
+    addVisionModel();
+    setPreviewPage(1);
+  }
+
+  function handleCloneActiveVisionModel() {
+    if (!activeVisionModel) {
+      return;
+    }
+
+    cloneVisionModel(activeVisionModel.id);
+    setPreviewPage(clampPage(activeVisionModel.roi.page || activeVisionModel.pageRangeStart || 1, activePageCount));
+  }
+
+  function handleRemoveActiveVisionModel() {
+    if (!activeVisionModel || visionRegistry.models.length <= 1) {
+      return;
+    }
+
+    setPreviewPage(1);
+    setVisionTestResults((current) => {
+      const next = { ...current };
+      delete next[activeVisionModel.id];
+      return next;
+    });
+    removeVisionModel(activeVisionModel.id);
+  }
+
   function syncVisionScopeWithFileMeta(meta: FileMeta, mode: "reset" | "clamp") {
     const totalPages = Math.max(meta.pageCount, 1);
-    const nextPageRangeStart =
-      mode === "reset"
-        ? 1
-        : Math.min(Math.max(visionConfig.pageRangeStart || 1, 1), totalPages);
-    const nextPageRangeEnd =
-      mode === "reset"
-        ? meta.pageCount
-        : Math.min(
-            Math.max(visionConfig.pageRangeEnd || nextPageRangeStart, nextPageRangeStart),
-            totalPages
-          );
-    const nextRoiPage =
-      mode === "reset"
-        ? 1
-        : clampPage(visionConfig.roi.page || 1, totalPages);
-    const nextPageRois = mode === "reset" ? {} : sanitizePageRois(visionConfig.pageRois, totalPages);
+    setVisionRegistry({
+      ...visionRegistry,
+      models: visionRegistry.models.map((model) => {
+        const nextPageRangeStart =
+          mode === "reset"
+            ? 1
+            : Math.min(Math.max(model.pageRangeStart || 1, 1), totalPages);
+        const nextPageRangeEnd =
+          mode === "reset"
+            ? meta.pageCount
+            : Math.min(
+                Math.max(model.pageRangeEnd || nextPageRangeStart, nextPageRangeStart),
+                totalPages
+              );
+        const nextRoiPage = mode === "reset" ? 1 : clampPage(model.roi.page || 1, totalPages);
+        const nextPageRois =
+          mode === "reset" ? {} : sanitizePageRois(model.pageRois, totalPages);
 
-    updateVisionConfig({
-      pageRangeStart: nextPageRangeStart,
-      pageRangeEnd: nextPageRangeEnd,
-      roi: {
-        ...visionConfig.roi,
-        page: nextRoiPage,
-      },
-      pageRois: nextPageRois,
+        return {
+          ...model,
+          pageRangeStart: nextPageRangeStart,
+          pageRangeEnd: nextPageRangeEnd,
+          roi: {
+            ...model.roi,
+            page: nextRoiPage,
+          },
+          pageRois: nextPageRois,
+        };
+      }),
     });
   }
 
@@ -723,23 +1032,64 @@ export function DashboardPage() {
     }
 
     await executeStage("vision", async () => {
-      const response = await runVisionApi(selectedFile, visionConfig);
-      setStageResult("vision", response);
-      if (response.file) {
-        const nextMeta = mergeServerFileMeta(response.file, selectedFile, activeFileMeta);
+      const executions = await Promise.allSettled(
+        visionRegistry.models.map(async (model) => {
+          const response = await runVisionApi(selectedFile, model);
+          return {
+            model,
+            response,
+          };
+        })
+      );
+
+      const nextVisionResults: Record<string, VisionModelResult | null> = {};
+      const failedMessages: string[] = [];
+      let nextMeta: FileMeta | null = null;
+
+      executions.forEach((execution, index) => {
+        const model = visionRegistry.models[index];
+        if (!model) {
+          return;
+        }
+
+        if (execution.status === "fulfilled") {
+          nextVisionResults[model.id] = buildVisionResult(model, execution.value.response);
+          if (execution.value.response.file) {
+            nextMeta = mergeServerFileMeta(
+              execution.value.response.file,
+              selectedFile,
+              nextMeta || activeFileMeta
+            );
+          }
+          return;
+        }
+
+        const errorMessage = getErrorMessage(execution.reason, language);
+        nextVisionResults[model.id] = buildVisionResult(model, null, errorMessage);
+        failedMessages.push(`${getVisionModelDisplayLabel(model)}: ${errorMessage}`);
+      });
+
+      setVisionResults(nextVisionResults);
+
+      if (nextMeta) {
         setFileMeta(nextMeta);
         if (activeDocumentId) {
           updateUploadedDocumentMeta(activeDocumentId, nextMeta);
         }
+      }
+
+      if (failedMessages.length > 0) {
+        await refreshSidebarData();
+        throw new Error(failedMessages.join(" | "));
       }
     });
   }
 
   async function handleRunPostprocess() {
     const upstageResult = results.upstage;
-    const visionResult = results.vision;
+    const visionResult = activeVisionResult;
 
-    if (!activeFileMeta || !upstageResult || !visionResult) {
+    if (!activeFileMeta || !upstageResult || !visionResult || visionResult.errorMessage) {
       alert(t("alerts.run_upstage_and_vision_first"));
       return;
     }
@@ -778,7 +1128,13 @@ export function DashboardPage() {
         updateUploadedDocumentMeta(activeDocumentId, nextMeta);
       }
       setStageResult("upstage", response.upstage);
-      setStageResult("vision", response.vision);
+      if (activeVisionModel) {
+        setVisionResults({
+          [activeVisionModel.id]: buildVisionResult(activeVisionModel, response.vision),
+        });
+      } else {
+        setVisionResults({});
+      }
       setStageResult("postprocess", response.postprocess);
       markStage("upstage", { state: "success" });
       markStage("vision", { state: "success" });
@@ -815,11 +1171,21 @@ export function DashboardPage() {
   }
 
   async function handleTestVisionCall() {
+    if (!activeVisionModel) {
+      return;
+    }
+
     try {
       const response = await testVisionCallApi(visionConfig);
-      setVisionTestResult(response);
+      setVisionTestResults((current) => ({
+        ...current,
+        [activeVisionModel.id]: response,
+      }));
     } catch (error) {
-      setVisionTestResult({ error: getErrorMessage(error, language) });
+      setVisionTestResults((current) => ({
+        ...current,
+        [activeVisionModel.id]: { error: getErrorMessage(error, language) },
+      }));
     }
   }
 
@@ -845,7 +1211,7 @@ export function DashboardPage() {
 
     const text = await readTextFile(file);
     if (target === "vision") {
-      updateVisionConfig({ referenceText: text, referenceEnabled: true });
+      updateActiveVisionConfig({ referenceText: text, referenceEnabled: true });
     } else {
       updatePostprocessConfig({ referenceText: text, referenceEnabled: true });
     }
@@ -895,30 +1261,66 @@ export function DashboardPage() {
   function handleLoadHistory(item: HistoryRecord) {
     setActiveDocumentId(null);
     setPreviewPage(1);
+    setFileMeta(null);
+    resetResults();
+    setVisionTestResults({});
 
+    let nextVisionRegistry: VisionRegistry | null = null;
     const bundle = coerceBundle(item.config);
     if (bundle) {
+      nextVisionRegistry = bundle.vision;
       applyConfigBundle(bundle);
     } else if (item.runType === "upstage") {
       updateUpstageConfig(item.config as Partial<typeof upstageConfig>);
     } else if (item.runType === "vision_llm") {
-      updateVisionConfig(item.config as Partial<typeof visionConfig>);
+      nextVisionRegistry = normalizeVisionRegistry(item.config);
+      setVisionRegistry(nextVisionRegistry);
     } else if (item.runType === "postprocess") {
       updatePostprocessConfig(item.config as Partial<typeof postprocessConfig>);
     }
 
     const result = item.result as Record<string, unknown>;
+    const nextRunStatus = createInitialRunStatus();
     if (item.runType === "full_pipeline") {
       setStageResult("upstage", coerceStageResult(result.upstage));
-      setStageResult("vision", coerceStageResult(result.vision));
+      const pipelineVisionRegistry = nextVisionRegistry || visionRegistry;
+      const pipelineVisionModel =
+        pipelineVisionRegistry.models.find(
+          (model) => model.id === pipelineVisionRegistry.activeModelId
+        ) || pipelineVisionRegistry.models[0];
+      const pipelineVisionResult = coerceStageResult(result.vision);
+      if (pipelineVisionModel && pipelineVisionResult) {
+        setVisionResults({
+          [pipelineVisionModel.id]: buildVisionResult(pipelineVisionModel, pipelineVisionResult),
+        });
+      } else {
+        setVisionResults({});
+      }
       setStageResult("postprocess", coerceStageResult(result.postprocess));
+      nextRunStatus.upstage = { state: "success" };
+      nextRunStatus.vision = { state: "success" };
+      nextRunStatus.postprocess = { state: "success" };
+      nextRunStatus.pipeline = { state: "success" };
     } else if (item.runType === "upstage") {
       setStageResult("upstage", coerceStageResult(item.result));
+      nextRunStatus.upstage = { state: "success" };
     } else if (item.runType === "vision_llm") {
-      setStageResult("vision", coerceStageResult(item.result));
+      const singleVisionRegistry = nextVisionRegistry || normalizeVisionRegistry(item.config);
+      const singleVisionModel =
+        singleVisionRegistry.models.find((model) => model.id === singleVisionRegistry.activeModelId) ||
+        singleVisionRegistry.models[0];
+      const singleVisionResult = coerceVisionResult(item.result, singleVisionModel);
+      if (singleVisionModel && singleVisionResult) {
+        setVisionResults({
+          [singleVisionModel.id]: singleVisionResult,
+        });
+      }
+      nextRunStatus.vision = { state: "success" };
     } else if (item.runType === "postprocess") {
       setStageResult("postprocess", coerceStageResult(item.result));
+      nextRunStatus.postprocess = { state: "success" };
     }
+    setRunStatus(nextRunStatus);
 
     if (item.fileName && item.mimeType && item.fileSize) {
       setFileMeta({
@@ -936,7 +1338,7 @@ export function DashboardPage() {
     setPreviewPage(clampedPage);
 
     if (visionConfig.rangeMode === "roi") {
-      updateVisionConfig({
+      updateActiveVisionConfig({
         roi: {
           ...visionConfig.roi,
           page: clampedPage,
@@ -948,7 +1350,7 @@ export function DashboardPage() {
   function updateRoi(patch: Partial<Roi>) {
     if (visionConfig.rangeMode === "page_and_roi") {
       const targetPage = clampPage(previewPage, activePageCount);
-      updateVisionConfig({
+      updateActiveVisionConfig({
         pageRois: {
           ...(visionConfig.pageRois || {}),
           [String(targetPage)]: {
@@ -961,7 +1363,7 @@ export function DashboardPage() {
       return;
     }
 
-    updateVisionConfig({
+    updateActiveVisionConfig({
       roi: {
         ...visionConfig.roi,
         ...patch,
@@ -971,7 +1373,18 @@ export function DashboardPage() {
   }
 
   function setRangeMode(mode: RangeMode) {
-    updateVisionConfig({ rangeMode: mode });
+    updateActiveVisionConfig({ rangeMode: mode });
+  }
+
+  function handleWorkspaceMenuSelect(section: WorkspaceMenuKey) {
+    setActiveWorkspaceSection(section);
+
+    if (typeof window !== "undefined") {
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth",
+      });
+    }
   }
 
   function resetDashboardState() {
@@ -979,7 +1392,7 @@ export function DashboardPage() {
     resetResults();
     setEndpointCheckResult(null);
     setUpstageTestResult(null);
-    setVisionTestResult(null);
+    setVisionTestResults({});
     setPostprocessTestResult(null);
     setRunStatus(createInitialRunStatus());
   }
@@ -1000,7 +1413,11 @@ export function DashboardPage() {
 
   const leftColumn = (
     <div className="space-y-6">
-      <SectionCard title={t("section.file.title")} subtitle={t("section.file.subtitle")}>
+      <div
+        id="workspace-document"
+        className={activeWorkspaceSection === "document" ? "block" : "hidden"}
+      >
+        <SectionCard title={t("section.file.title")} subtitle={t("section.file.subtitle")}>
         <label className="flex cursor-pointer flex-col items-center justify-center rounded-[28px] border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center transition hover:border-teal hover:bg-white">
           <span className="text-base font-medium text-ink">{t("section.file.select")}</span>
           <span className="mt-2 text-sm text-slate-500">{t("section.file.supported")}</span>
@@ -1075,7 +1492,7 @@ export function DashboardPage() {
                       <span
                         className={`rounded-full px-3 py-1 text-xs font-medium ${
                           isActive
-                            ? "bg-teal text-white"
+                            ? ACTIVE_TAB_CLASS
                             : "border border-slate-200 bg-slate-50 text-slate-600"
                         }`}
                       >
@@ -1106,9 +1523,41 @@ export function DashboardPage() {
               : undefined
           }
         />
-      </SectionCard>
+        </SectionCard>
+      </div>
 
-      <SectionCard title={t("section.upstage.title")} subtitle={t("section.upstage.subtitle")}>
+      <div
+        id="workspace-ocr_setup"
+        className={activeWorkspaceSection === "ocr_setup" ? "space-y-6" : "hidden"}
+      >
+        <SectionCard
+          title={language === "ko" ? "OCR 설정" : "OCR Setup"}
+          subtitle={
+            language === "ko"
+              ? "Upstage, Vision, Postprocess 설정을 탭으로 전환하면서 조정합니다."
+              : "Switch between Upstage, Vision, and Postprocess settings with tabs."
+          }
+        >
+          <div className="flex flex-wrap gap-3">
+            {ocrSetupTabs.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setOcrSetupView(tab.key)}
+                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                  ocrSetupView === tab.key
+                    ? ACTIVE_TAB_CLASS
+                    : INACTIVE_TAB_CLASS
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </SectionCard>
+
+        {ocrSetupView === "upstage" ? (
+        <SectionCard title={t("section.upstage.title")} subtitle={t("section.upstage.subtitle")}>
         <div className="grid gap-4 md:grid-cols-2">
           <InputField
             label={t("field.dp_url")}
@@ -1192,8 +1641,8 @@ export function DashboardPage() {
                   }
                   className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
                     active
-                      ? "border-teal bg-teal text-white"
-                      : "border-slate-300 bg-white text-slate-700 hover:border-teal"
+                      ? ACTIVE_PILL_CLASS
+                      : INACTIVE_PILL_CLASS
                   }`}
                 >
                   {format}
@@ -1235,25 +1684,96 @@ export function DashboardPage() {
           <JsonViewer label={t("json.upstage_test")} data={upstageTestResult} />
         ) : null}
       </SectionCard>
+        ) : null}
 
+        {ocrSetupView === "vision" ? (
+          <>
       <SectionCard title={t("section.vision.title")} subtitle={t("section.vision.subtitle")}>
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
+              {language === "ko" ? "모델 등록" : "Model Registry"}
+            </p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {language === "ko"
+                ? "탭마다 독립된 Vision URL과 모델을 등록합니다. Vision OCR 실행 시 모든 등록 탭이 각각 응답을 반환합니다."
+                : "Each tab stores an independent Vision URL and model. Running Vision OCR executes every registered tab separately."}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleAddVisionModel}
+              className="rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
+            >
+              {language === "ko" ? "+ 모델 추가" : "+ Add Model"}
+            </button>
+            <button
+              type="button"
+              onClick={handleCloneActiveVisionModel}
+              className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-ink hover:text-ink"
+            >
+              {language === "ko" ? "현재 탭 복제" : "Clone Current"}
+            </button>
+            {visionRegistry.models.length > 1 ? (
+              <button
+                type="button"
+                onClick={handleRemoveActiveVisionModel}
+                className="rounded-full border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-600 transition hover:bg-red-50"
+              >
+                {language === "ko" ? "현재 탭 삭제" : "Remove Current"}
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {visionRegistry.models.map((model, index) => {
+            const active = activeVisionModel?.id === model.id;
+            return (
+              <button
+                key={model.id}
+                type="button"
+                onClick={() => handleSelectVisionModel(model.id)}
+                className={`rounded-[22px] border px-4 py-3 text-left transition ${
+                  active
+                    ? `${ACTIVE_TAB_CLASS} border border-ink`
+                    : "border border-slate-300 bg-white text-slate-700 hover:border-ink hover:bg-slate-50"
+                }`}
+              >
+                <span className="block text-sm font-semibold">
+                  {getVisionModelDisplayLabel(model, index + 1)}
+                </span>
+                <span className={`mt-1 block text-xs ${active ? "text-slate-100" : "text-slate-500"}`}>
+                  {model.model || `${language === "ko" ? "모델" : "Model"} ${index + 1}`}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
         <div className="grid gap-4 md:grid-cols-2">
+          <InputField
+            label={language === "ko" ? "탭 이름" : "Tab Name"}
+            value={visionConfig.label}
+            onChange={(event) => updateActiveVisionConfig({ label: event.target.value })}
+          />
           <InputField
             label={t("field.vision_url")}
             value={visionConfig.url}
-            onChange={(event) => updateVisionConfig({ url: event.target.value })}
+            onChange={(event) => updateActiveVisionConfig({ url: event.target.value })}
             placeholder="http://vision-host:8000/v1/chat/completions"
           />
           <InputField
             label={t("field.model")}
             value={visionConfig.model}
-            onChange={(event) => updateVisionConfig({ model: event.target.value })}
+            onChange={(event) => updateActiveVisionConfig({ model: event.target.value })}
           />
           <InputField
             label={t("field.api_key")}
             type="password"
             value={visionConfig.apiKey}
-            onChange={(event) => updateVisionConfig({ apiKey: event.target.value })}
+            onChange={(event) => updateActiveVisionConfig({ apiKey: event.target.value })}
             placeholder={t("common.optional")}
           />
           <InputField
@@ -1261,7 +1781,7 @@ export function DashboardPage() {
             type="number"
             value={String(visionConfig.timeoutMs)}
             onChange={(event) =>
-              updateVisionConfig({ timeoutMs: Number(event.target.value || 0) })
+              updateActiveVisionConfig({ timeoutMs: Number(event.target.value || 0) })
             }
           />
         </div>
@@ -1273,28 +1793,28 @@ export function DashboardPage() {
             step="0.1"
             value={String(visionConfig.temperature)}
             onChange={(event) =>
-              updateVisionConfig({ temperature: Number(event.target.value || 0) })
+              updateActiveVisionConfig({ temperature: Number(event.target.value || 0) })
             }
           />
           <InputField
             label={t("field.max_tokens")}
             type="number"
             value={String(visionConfig.maxTokens)}
-            onChange={(event) => updateVisionConfig({ maxTokens: Number(event.target.value || 0) })}
+            onChange={(event) => updateActiveVisionConfig({ maxTokens: Number(event.target.value || 0) })}
           />
           <InputField
             label={t("field.top_p")}
             type="number"
             step="0.1"
             value={String(visionConfig.topP)}
-            onChange={(event) => updateVisionConfig({ topP: Number(event.target.value || 0) })}
+            onChange={(event) => updateActiveVisionConfig({ topP: Number(event.target.value || 0) })}
           />
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
           <Toggle
             checked={visionConfig.useHardcodedPrompts}
-            onChange={(checked) => updateVisionConfig({ useHardcodedPrompts: checked })}
+            onChange={(checked) => updateActiveVisionConfig({ useHardcodedPrompts: checked })}
             label={t("toggle.use_hardcoded_prompts")}
           />
           <InfoTooltip content={t("help.vision_hardcoded_prompts")} />
@@ -1303,26 +1823,26 @@ export function DashboardPage() {
         <TextareaField
           label={t("field.system_prompt")}
           value={visionConfig.systemPrompt}
-          onChange={(event) => updateVisionConfig({ systemPrompt: event.target.value })}
+          onChange={(event) => updateActiveVisionConfig({ systemPrompt: event.target.value })}
           className="min-h-24"
         />
         <TextareaField
           label={t("field.user_prompt")}
           value={visionConfig.userPrompt}
-          onChange={(event) => updateVisionConfig({ userPrompt: event.target.value })}
+          onChange={(event) => updateActiveVisionConfig({ userPrompt: event.target.value })}
           className="min-h-28"
         />
         <TextareaField
           label={t("field.extraction_rules")}
           value={visionConfig.extractionRules}
-          onChange={(event) => updateVisionConfig({ extractionRules: event.target.value })}
+          onChange={(event) => updateActiveVisionConfig({ extractionRules: event.target.value })}
           className="min-h-24"
         />
 
         <div className="flex flex-wrap gap-3">
           <Toggle
             checked={visionConfig.referenceEnabled}
-            onChange={(checked) => updateVisionConfig({ referenceEnabled: checked })}
+            onChange={(checked) => updateActiveVisionConfig({ referenceEnabled: checked })}
             label={t("toggle.use_reference_text")}
           />
           <label className="inline-flex cursor-pointer items-center rounded-full border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-teal">
@@ -1339,7 +1859,7 @@ export function DashboardPage() {
         <TextareaField
           label={t("field.reference_text")}
           value={visionConfig.referenceText}
-          onChange={(event) => updateVisionConfig({ referenceText: event.target.value })}
+          onChange={(event) => updateActiveVisionConfig({ referenceText: event.target.value })}
           className="min-h-28"
         />
 
@@ -1347,13 +1867,13 @@ export function DashboardPage() {
           <TextareaField
             label={t("field.extra_headers_json")}
             value={visionConfig.headersJson}
-            onChange={(event) => updateVisionConfig({ headersJson: event.target.value })}
+            onChange={(event) => updateActiveVisionConfig({ headersJson: event.target.value })}
             className="min-h-24 font-mono"
           />
           <TextareaField
             label={t("field.extra_body_json")}
             value={visionConfig.extraBodyJson}
-            onChange={(event) => updateVisionConfig({ extraBodyJson: event.target.value })}
+            onChange={(event) => updateActiveVisionConfig({ extraBodyJson: event.target.value })}
             className="min-h-24 font-mono"
           />
         </div>
@@ -1369,8 +1889,11 @@ export function DashboardPage() {
         </div>
         <p className="text-xs text-slate-500">{t("json.connection_note")}</p>
 
-        {visionTestResult ? (
-          <JsonViewer label={t("json.vision_test")} data={visionTestResult} />
+        {activeVisionTestResult ? (
+          <JsonViewer
+            label={`${activeVisionDisplayLabel} ${t("json.vision_test")}`}
+            data={activeVisionTestResult}
+          />
         ) : null}
       </SectionCard>
 
@@ -1383,8 +1906,8 @@ export function DashboardPage() {
               onClick={() => setRangeMode(mode)}
               className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
                 visionConfig.rangeMode === mode
-                  ? "border-teal bg-teal text-white"
-                  : "border-slate-300 bg-white text-slate-700 hover:border-teal"
+                  ? ACTIVE_PILL_CLASS
+                  : INACTIVE_PILL_CLASS
               }`}
             >
               {label}
@@ -1402,7 +1925,7 @@ export function DashboardPage() {
               max={String(activeFileMeta.pageCount)}
               value={String(visionConfig.pageRangeStart)}
               onChange={(event) =>
-                updateVisionConfig({ pageRangeStart: Number(event.target.value || 1) })
+                updateActiveVisionConfig({ pageRangeStart: Number(event.target.value || 1) })
               }
             />
             <InputField
@@ -1412,7 +1935,7 @@ export function DashboardPage() {
               max={String(activeFileMeta.pageCount)}
               value={String(visionConfig.pageRangeEnd)}
               onChange={(event) =>
-                updateVisionConfig({ pageRangeEnd: Number(event.target.value || 1) })
+                updateActiveVisionConfig({ pageRangeEnd: Number(event.target.value || 1) })
               }
             />
           </div>
@@ -1482,7 +2005,10 @@ export function DashboardPage() {
           </div>
         )}
       </SectionCard>
+          </>
+        ) : null}
 
+        {ocrSetupView === "postprocess" ? (
       <SectionCard
         title={t("section.postprocess.title")}
         subtitle={t("section.postprocess.subtitle")}
@@ -1619,15 +2145,21 @@ export function DashboardPage() {
           <JsonViewer label={t("json.postprocess_test")} data={postprocessTestResult} />
         ) : null}
       </SectionCard>
+        ) : null}
+      </div>
     </div>
   );
 
   const rightColumn = (
     <div className="space-y-6">
-      <SectionCard
-        title={t("section.run_controls.title")}
-        subtitle={t("section.run_controls.subtitle")}
+      <div
+        id="workspace-run_center"
+        className={activeWorkspaceSection === "run_center" ? "block" : "hidden"}
       >
+        <SectionCard
+          title={t("section.run_controls.title")}
+          subtitle={t("section.run_controls.subtitle")}
+        >
         <div className="grid gap-3">
           {stageActions.map(([key, action, label]) => (
             <button
@@ -1668,9 +2200,14 @@ export function DashboardPage() {
             ))}
           </div>
         </div>
-      </SectionCard>
+        </SectionCard>
+      </div>
 
-      <SectionCard title={t("section.presets.title")} subtitle={t("section.presets.subtitle")}>
+      <div
+        id="workspace-library"
+        className={activeWorkspaceSection === "library" ? "space-y-6" : "hidden"}
+      >
+        <SectionCard title={t("section.presets.title")} subtitle={t("section.presets.subtitle")}>
         <div className="space-y-4">
           <InputField
             label={t("field.preset_name")}
@@ -1755,8 +2292,8 @@ export function DashboardPage() {
                 onClick={() => setPresetPage(page)}
                 className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
                   page === presetPage
-                    ? "bg-teal text-white"
-                    : "border border-slate-300 bg-white text-slate-700 hover:border-teal hover:text-teal"
+                    ? ACTIVE_TAB_CLASS
+                    : INACTIVE_TAB_CLASS
                 }`}
               >
                 {page}
@@ -1841,8 +2378,8 @@ export function DashboardPage() {
                 onClick={() => setHistoryPage(page)}
                 className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
                   page === historyPage
-                    ? "bg-teal text-white"
-                    : "border border-slate-300 bg-white text-slate-700 hover:border-teal hover:text-teal"
+                    ? ACTIVE_TAB_CLASS
+                    : INACTIVE_TAB_CLASS
                 }`}
               >
                 {page}
@@ -1859,62 +2396,207 @@ export function DashboardPage() {
           </div>
         ) : null}
       </SectionCard>
+      </div>
     </div>
   );
 
   const resultsPanel = (
-    <div className="mt-6">
+    <div
+      id="workspace-results"
+      className={activeWorkspaceSection === "results" ? "mt-0" : "hidden"}
+    >
       <SectionCard
         title={t("section.results.title")}
-        subtitle={t("section.results.subtitle")}
+        subtitle={resultsWorkspaceSubtitle}
       >
-        <div className="grid gap-4 xl:grid-cols-3">
-          <ResultPane
-            title={t("results.upstage")}
-            text={resolveUpstageText(results.upstage)}
-            raw={results.upstage?.raw}
-            statusCode={results.upstage?.statusCode}
-            errorMessage={
-              runStatus.upstage.state === "error" ? runStatus.upstage.message : undefined
-            }
-          />
-          <ResultPane
-            title={t("results.vision")}
-            text={results.vision?.text}
-            raw={results.vision?.raw}
-            statusCode={results.vision?.statusCode}
-            promptPreview={results.vision?.usedPrompt?.compiledPrompt}
-            referencePreview={results.vision?.usedReferenceText}
-            errorMessage={runStatus.vision.state === "error" ? runStatus.vision.message : undefined}
-          />
-          <ResultPane
-            title={t("results.postprocess")}
-            text={results.postprocess?.text}
-            raw={results.postprocess?.raw}
-            statusCode={results.postprocess?.statusCode}
-            promptPreview={results.postprocess?.usedPrompt?.compiledPrompt}
-            referencePreview={results.postprocess?.usedReferenceText}
-            errorMessage={
-              runStatus.postprocess.state === "error" ? runStatus.postprocess.message : undefined
-            }
-          />
+        <div className="flex flex-wrap gap-2">
+          {workspaceTabs.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setResultsView(tab.key)}
+              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                resultsView === tab.key
+                  ? ACTIVE_TAB_CLASS
+                  : INACTIVE_TAB_CLASS
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-2">
-          <JsonViewer label={t("results.vision_range_info")} data={results.vision?.range || {}} />
-          <JsonViewer
-            label={t("results.upstage_summary")}
-            data={{
-              content: results.upstage?.content || {},
-              elements: results.upstage?.elements || [],
-              usage: results.upstage?.usage || {},
-              pageCount: results.upstage?.pageCount || null,
-            }}
-          />
-        </div>
+        {resultsView === "compare" ? (
+          <div className="space-y-4">
+            {/*
+            <div className="hidden">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
+                    {language === "ko" ? "비교 조합" : "Comparison Set"}
+                  </p>
+                  <p className="mt-2 text-sm text-slate-600">
+                    {language === "ko"
+                      ? "두 결과를 넓게 나란히 보거나, 필요하면 전체 3개 결과를 한 번에 확인할 수 있습니다."
+                      : "Open two results side by side for larger reading space, or switch to the all-three view when needed."}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {compareModeTabs.map((tab) => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => undefined}
+                      className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                        compareMode === tab.key
+                          ? ACTIVE_TAB_CLASS
+                          : INACTIVE_TAB_CLASS
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            */}
+
+            <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
+              {language === "ko"
+                ? `등록된 Vision 모델 ${visionRegistry.models.length}개가 각각 독립 실행된 결과입니다. Postprocess와 Full Pipeline은 현재 활성 탭 ${activeVisionDisplayLabel} 기준으로 동작합니다.`
+                : `${visionRegistry.models.length} registered Vision models run independently. Postprocess and Full Pipeline use the current active tab, ${activeVisionDisplayLabel}.`}
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              {comparePanes.map((pane) => (
+                <ResultPane
+                  key={pane.title}
+                  title={pane.title}
+                  text={pane.text}
+                  raw={pane.raw}
+                  statusCode={pane.statusCode}
+                  promptPreview={pane.promptPreview}
+                  referencePreview={pane.referencePreview}
+                  errorMessage={pane.errorMessage}
+                  className="min-h-[42rem]"
+                  textareaClassName="h-[30rem] md:h-[36rem] xl:h-[42rem]"
+                  contentClassName="space-y-4"
+                />
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {resultsView === "vision" ? (
+          <div className="space-y-4">
+            <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
+              {language === "ko"
+                ? `현재 활성 Vision 탭은 ${activeVisionDisplayLabel}이며, Postprocess와 Full Pipeline이 이 탭의 결과를 사용합니다.`
+                : `The active Vision tab is ${activeVisionDisplayLabel}. Postprocess and Full Pipeline use this tab's result.`}
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              {visionPaneEntries.map(({ model, pane }) => (
+                <ResultPane
+                  key={model.id}
+                  title={
+                    activeVisionModel?.id === model.id
+                      ? `${pane.title} · ${language === "ko" ? "활성" : "Active"}`
+                      : pane.title
+                  }
+                  text={pane.text}
+                  raw={pane.raw}
+                  statusCode={pane.statusCode}
+                  promptPreview={pane.promptPreview}
+                  referencePreview={pane.referencePreview}
+                  errorMessage={pane.errorMessage}
+                  className="min-h-[42rem]"
+                  textareaClassName="h-[30rem] md:h-[36rem] xl:h-[42rem]"
+                  contentClassName="space-y-4"
+                />
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {focusedPane ? (
+          <div className="space-y-4">
+            <ResultPane
+              title={focusedPane.title}
+              text={focusedPane.text}
+              raw={focusedPane.raw}
+              statusCode={focusedPane.statusCode}
+              promptPreview={focusedPane.promptPreview}
+              referencePreview={focusedPane.referencePreview}
+              errorMessage={focusedPane.errorMessage}
+              className="min-h-[48rem]"
+              textareaClassName="h-[34rem] md:h-[40rem] xl:h-[48rem]"
+              contentClassName="space-y-4"
+            />
+
+            {focusedPaneKey === "upstage" ? (
+              <div className="grid gap-4 xl:grid-cols-2">
+                {focusedPaneKey === "upstage" ? (
+                  <JsonViewer
+                    label={t("results.upstage_summary")}
+                    data={{
+                      content: results.upstage?.content || {},
+                      elements: results.upstage?.elements || [],
+                      usage: results.upstage?.usage || {},
+                      pageCount: results.upstage?.pageCount || null,
+                    }}
+                    defaultOpen
+                  />
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {resultsView === "insights" ? (
+          <div className="grid gap-4 xl:grid-cols-2">
+            {visionPaneEntries.map(({ model }) => {
+              const result = results.vision[model.id] || null;
+              return (
+                <React.Fragment key={`vision-insights-range-${model.id}`}>
+                  <JsonViewer
+                    label={`${buildVisionResultTitle(language, model)} ${language === "ko" ? "범위 정보" : "Range Info"}`}
+                    data={result?.range || {}}
+                    defaultOpen={activeVisionModel?.id === model.id}
+                  />
+                </React.Fragment>
+              );
+            })}
+            <JsonViewer
+              label={t("results.upstage_summary")}
+              data={{
+                content: results.upstage?.content || {},
+                elements: results.upstage?.elements || [],
+                usage: results.upstage?.usage || {},
+                pageCount: results.upstage?.pageCount || null,
+              }}
+              defaultOpen
+            />
+            <JsonViewer
+              label={`${t("results.vision")} ${language === "ko" ? "원본 JSON" : "Raw JSON"}`}
+              data={activeVisionResult?.raw || {}}
+            />
+            <JsonViewer
+              label={`${t("results.postprocess")} ${language === "ko" ? "원본 JSON" : "Raw JSON"}`}
+              data={results.postprocess?.raw || {}}
+            />
+          </div>
+        ) : null}
       </SectionCard>
     </div>
   );
+
+  const currentWorkspaceContent =
+    activeWorkspaceSection === "document" || activeWorkspaceSection === "ocr_setup"
+      ? leftColumn
+      : activeWorkspaceSection === "run_center" || activeWorkspaceSection === "library"
+        ? rightColumn
+        : resultsPanel;
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(15,118,110,0.18),_transparent_34%),radial-gradient(circle_at_top_right,_rgba(249,115,22,0.18),_transparent_28%),linear-gradient(180deg,_#f8f4ec_0%,_#f2eee6_100%)]">
@@ -1944,7 +2626,7 @@ export function DashboardPage() {
                         type="button"
                         onClick={() => setLanguage(option)}
                         className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${
-                          active ? "bg-teal text-white" : "text-slate-600 hover:text-teal"
+                          active ? ACTIVE_TAB_CLASS : "text-slate-600 hover:text-ink"
                         }`}
                       >
                         {option === "en" ? t("language.english") : t("language.korean")}
@@ -1964,12 +2646,130 @@ export function DashboardPage() {
           </div>
         </header>
 
-        <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-          {leftColumn}
-          {rightColumn}
-        </div>
+        <div
+          className={`grid gap-6 ${
+            isWorkspaceMenuCollapsed
+              ? "xl:grid-cols-[96px_minmax(0,1fr)]"
+              : "xl:grid-cols-[280px_minmax(0,1fr)]"
+          }`}
+        >
+          <aside className="xl:sticky xl:top-6 xl:self-start">
+            <div
+              className={`rounded-[28px] border border-white/70 bg-white/88 shadow-panel backdrop-blur transition-all ${
+                isWorkspaceMenuCollapsed ? "p-3" : "p-4"
+              }`}
+            >
+              <div
+                className={`border-b border-slate-200/80 ${
+                  isWorkspaceMenuCollapsed ? "px-1 pb-3" : "px-2 pb-4"
+                }`}
+              >
+                <p
+                  className={`text-xs font-semibold uppercase tracking-[0.28em] text-teal ${
+                    isWorkspaceMenuCollapsed ? "hidden" : "block"
+                  }`}
+                >
+                  {language === "ko" ? "작업 메뉴" : "Workspace Menu"}
+                </p>
+                <p
+                  className={`mt-2 text-sm leading-6 text-slate-600 ${
+                    isWorkspaceMenuCollapsed ? "hidden" : "block"
+                  }`}
+                >
+                  {language === "ko"
+                    ? "왼쪽 메뉴로 작업 단계를 나누고, 필요한 영역으로 바로 이동할 수 있습니다."
+                    : "Use the left menu to move between workflow stages and keep related tasks grouped together."}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIsWorkspaceMenuCollapsed((current) => !current)}
+                  className={`mt-3 rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-teal hover:text-teal ${
+                    isWorkspaceMenuCollapsed ? "w-full" : ""
+                  }`}
+                >
+                  {isWorkspaceMenuCollapsed
+                    ? language === "ko"
+                      ? "펼치기"
+                      : "Expand"
+                    : language === "ko"
+                      ? "접기"
+                      : "Collapse"}
+                </button>
+              </div>
 
-        {resultsPanel}
+              <div className="mt-4 space-y-2">
+                {workspaceMenuItems.map((item) => {
+                  const active = activeWorkspaceSection === item.key;
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      title={item.label}
+                      aria-label={item.label}
+                      onClick={() => handleWorkspaceMenuSelect(item.key)}
+                      className={`flex w-full rounded-[22px] text-left transition ${
+                        active
+                          ? `${ACTIVE_TAB_CLASS} border border-ink`
+                          : "border border-slate-200 bg-slate-50 text-slate-700 hover:border-ink hover:bg-white"
+                      } ${
+                        isWorkspaceMenuCollapsed
+                          ? "items-center justify-center px-2 py-4"
+                          : "items-start gap-3 px-4 py-4"
+                      }`}
+                    >
+                      <span
+                        className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                          active
+                            ? "bg-white text-ink shadow-sm"
+                            : "bg-white text-slate-500 ring-1 ring-slate-200"
+                        }`}
+                      >
+                        {item.step}
+                      </span>
+                      <span className={isWorkspaceMenuCollapsed ? "hidden" : "min-w-0"}>
+                        <span className="block text-sm font-semibold">{item.label}</span>
+                        <span
+                          className={`mt-1 block text-xs leading-5 ${
+                            active ? "text-slate-100" : "text-slate-500"
+                          }`}
+                        >
+                          {item.description}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </aside>
+
+          <div className="min-w-0 space-y-6">
+            <section className="rounded-[28px] border border-white/70 bg-white/78 p-4 shadow-panel backdrop-blur sm:p-5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
+                    {language === "ko" ? "현재 작업" : "Current Workspace"}
+                  </p>
+                  <h2 className="mt-2 text-2xl font-semibold tracking-tight text-ink">
+                    {workspaceMenuItems.find((item) => item.key === activeWorkspaceSection)?.label}
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    {
+                      workspaceMenuItems.find((item) => item.key === activeWorkspaceSection)
+                        ?.description
+                    }
+                  </p>
+                </div>
+                <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
+                  {language === "ko" ? "단계" : "Step"}{" "}
+                  {workspaceMenuItems.find((item) => item.key === activeWorkspaceSection)?.step}
+                </div>
+              </div>
+            </section>
+
+            {currentWorkspaceContent}
+          </div>
+        </div>
       </div>
     </div>
   );

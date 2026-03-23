@@ -11,7 +11,15 @@ type ResultPaneProps = {
   promptPreview?: string;
   referencePreview?: string;
   errorMessage?: string;
+  className?: string;
+  textareaClassName?: string;
+  contentClassName?: string;
+  rawDefaultOpen?: boolean;
 };
+
+function cn(...values: Array<string | undefined>): string {
+  return values.filter(Boolean).join(" ");
+}
 
 export function ResultPane({
   title,
@@ -21,13 +29,22 @@ export function ResultPane({
   promptPreview,
   referencePreview,
   errorMessage,
+  className,
+  textareaClassName,
+  contentClassName,
+  rawDefaultOpen = false,
 }: ResultPaneProps) {
   const value = text || "";
   const language = useAppStore((state) => state.language);
   const t = (key: string) => translate(language, key);
 
   return (
-    <div className="flex min-h-[28rem] flex-col rounded-[26px] border border-slate-200 bg-white">
+    <div
+      className={cn(
+        "flex min-h-[28rem] flex-col rounded-[26px] border border-slate-200 bg-white",
+        className
+      )}
+    >
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <div>
           <h3 className="font-semibold text-ink">{title}</h3>
@@ -61,11 +78,15 @@ export function ResultPane({
         </div>
       ) : null}
 
-      <div className="flex-1 space-y-3 p-4">
+      <div className={cn("flex-1 space-y-3 p-4", contentClassName)}>
         <textarea
           readOnly
           value={value}
-          className="h-64 w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm leading-6 text-slate-800 outline-none"
+          spellCheck={false}
+          className={cn(
+            "h-64 w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm leading-6 text-slate-800 outline-none",
+            textareaClassName
+          )}
           placeholder={t("result.placeholder")}
         />
 
@@ -91,7 +112,7 @@ export function ResultPane({
           </div>
         ) : null}
 
-        <JsonViewer label={t("result.raw_json")} data={raw ?? {}} />
+        <JsonViewer label={t("result.raw_json")} data={raw ?? {}} defaultOpen={rawDefaultOpen} />
       </div>
     </div>
   );

@@ -203,7 +203,7 @@ async function runPostprocess(req, res) {
     mimeType: file.mimeType || null,
     fileSize: file.fileSize || null,
     filePages: file.pageCount || null,
-    config,
+    config: sanitizeConfigForStorage(config),
     roi: visionResult?.range?.roi || null,
     result,
   });

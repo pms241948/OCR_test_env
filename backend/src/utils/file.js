@@ -143,19 +143,19 @@ function normalizeRoi(roi) {
   }
 
   const normalized = {
-    x: Math.max(0, Math.min(1, x)),
-    y: Math.max(0, Math.min(1, y)),
+    x: Math.max(0, Math.min(0.9999, x)),
+    y: Math.max(0, Math.min(0.9999, y)),
     width: Math.max(0.0001, Math.min(1, width)),
     height: Math.max(0.0001, Math.min(1, height)),
     page: roi.page ? Number(roi.page) : undefined,
   };
 
   if (normalized.x + normalized.width > 1) {
-    normalized.width = 1 - normalized.x;
+    normalized.width = Math.max(0.0001, 1 - normalized.x);
   }
 
   if (normalized.y + normalized.height > 1) {
-    normalized.height = 1 - normalized.y;
+    normalized.height = Math.max(0.0001, 1 - normalized.y);
   }
 
   return normalized;

@@ -32,17 +32,25 @@ async function cropImage(inputPath, roi, outputPath) {
   }
 
   const normalized = normalizeRoi(roi);
-  const left = Math.round(normalized.x * metadata.width);
-  const top = Math.round(normalized.y * metadata.height);
-  const width = Math.max(1, Math.round(normalized.width * metadata.width));
-  const height = Math.max(1, Math.round(normalized.height * metadata.height));
+  const left = Math.min(metadata.width - 1, Math.floor(normalized.x * metadata.width));
+  const top = Math.min(metadata.height - 1, Math.floor(normalized.y * metadata.height));
+  const right = Math.min(
+    metadata.width,
+    Math.max(left + 1, Math.ceil((normalized.x + normalized.width) * metadata.width))
+  );
+  const bottom = Math.min(
+    metadata.height,
+    Math.max(top + 1, Math.ceil((normalized.y + normalized.height) * metadata.height))
+  );
+  const width = right - left;
+  const height = bottom - top;
 
   await image
     .extract({
-      left: Math.min(left, metadata.width - 1),
-      top: Math.min(top, metadata.height - 1),
-      width: Math.min(width, metadata.width - left),
-      height: Math.min(height, metadata.height - top),
+      left,
+      top,
+      width,
+      height,
     })
     .png()
     .toFile(outputPath);
