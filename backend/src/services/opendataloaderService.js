@@ -5,6 +5,7 @@ const { AppError } = require("../utils/errors");
 const { createTempDir, isPdfFile } = require("../utils/file");
 
 const SUPPORTED_OUTPUT_FORMATS = new Set(["json", "text", "html", "markdown"]);
+const DEFAULT_OUTPUT_FORMATS = ["json", "text", "markdown", "html"];
 
 let openDataLoaderModulePromise;
 
@@ -56,10 +57,236 @@ function normalizeOutputFormats(config) {
     .filter((format) => SUPPORTED_OUTPUT_FORMATS.has(format));
 
   if (!normalized.length) {
-    return ["json", "markdown", "html"];
+    return DEFAULT_OUTPUT_FORMATS;
   }
 
   return [...new Set(normalized)];
+}
+
+function decodeHtmlEntities(input) {
+  return String(input || "").replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (entity, value) => {
+    const normalized = String(value || "").toLowerCase();
+
+    if (normalized === "nbsp") {
+      return " ";
+    }
+    if (normalized === "amp") {
+      return "&";
+    }
+    if (normalized === "lt") {
+      return "<";
+    }
+    if (normalized === "gt") {
+      return ">";
+    }
+    if (normalized === "quot") {
+      return '"';
+    }
+    if (normalized === "apos") {
+      return "'";
+    }
+    if (normalized.startsWith("#x")) {
+      return String.fromCodePoint(parseInt(normalized.slice(2), 16));
+    }
+    if (normalized.startsWith("#")) {
+      return String.fromCodePoint(parseInt(normalized.slice(1), 10));
+    }
+
+    return entity;
+  });
+}
+
+function normalizeTextBlock(input, { collapseLineBreaks = false } = {}) {
+  const normalized = decodeHtmlEntities(String(input || ""))
+    .replace(/\r\n/g, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|section|article|li|tr|table|thead|tbody|tfoot|ul|ol|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (collapseLineBreaks) {
+    return normalized.replace(/\n+/g, " ").replace(/\s{2,}/g, " ").trim();
+  }
+
+  return normalized.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function getChildNodes(node) {
+  if (!node || typeof node !== "object") {
+    return [];
+  }
+
+  const children = [];
+
+  if (Array.isArray(node.kids)) {
+    children.push(...node.kids);
+  }
+  if (Array.isArray(node["list items"])) {
+    children.push(...node["list items"]);
+  }
+
+  return children;
+}
+
+function extractInlineText(node) {
+  if (!node || typeof node !== "object") {
+    return "";
+  }
+
+  const ownText =
+    typeof node.content === "string" ? normalizeTextBlock(node.content, { collapseLineBreaks: true }) : "";
+  const childText = getChildNodes(node)
+    .map((child) => extractInlineText(child))
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  if (!ownText) {
+    return childText;
+  }
+
+  if (!childText || childText === ownText) {
+    return ownText;
+  }
+
+  return `${ownText} ${childText}`.replace(/\s{2,}/g, " ").trim();
+}
+
+function formatTableRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) {
+    return "";
+  }
+
+  const lines = rows
+    .map((row) => {
+      const cells = Array.isArray(row?.cells) ? row.cells : [];
+      const cellValues = cells
+        .map((cell) => extractInlineText(cell))
+        .map((value) => value.replace(/\s{2,}/g, " ").trim())
+        .filter((value) => value.length > 0);
+
+      if (!cellValues.length) {
+        return "";
+      }
+
+      return `| ${cellValues.join(" | ")} |`;
+    })
+    .filter(Boolean);
+
+  if (!lines.length) {
+    return "";
+  }
+
+  return ["[Table]", ...lines].join("\n");
+}
+
+function collectStructuredBlocks(nodes, depth = 0) {
+  if (!Array.isArray(nodes)) {
+    return [];
+  }
+
+  return nodes.flatMap((node) => collectStructuredBlocksFromNode(node, depth)).filter(Boolean);
+}
+
+function collectStructuredBlocksFromNode(node, depth = 0) {
+  if (!node || typeof node !== "object") {
+    return [];
+  }
+
+  const type = String(node.type || "").toLowerCase();
+  const ownText =
+    typeof node.content === "string" ? normalizeTextBlock(node.content, { collapseLineBreaks: false }) : "";
+
+  if (type === "header" || type === "footer") {
+    return [];
+  }
+
+  if (type === "heading") {
+    const headingText = ownText || extractInlineText(node);
+    if (!headingText) {
+      return collectStructuredBlocks(getChildNodes(node), depth);
+    }
+
+    const level = Math.min(Math.max(Number(node["heading level"] || 1) || 1, 1), 6);
+    return [`${"#".repeat(level)} ${headingText}`];
+  }
+
+  if (type === "table") {
+    const tableText = formatTableRows(node.rows);
+    const childBlocks = collectStructuredBlocks(getChildNodes(node), depth);
+    return [tableText, ...childBlocks].filter(Boolean);
+  }
+
+  if (type === "list") {
+    return collectStructuredBlocks(Array.isArray(node["list items"]) ? node["list items"] : [], depth + 1);
+  }
+
+  if (type === "list item") {
+    const itemText = ownText || extractInlineText(node);
+    const indent = "  ".repeat(Math.max(depth - 1, 0));
+    const childBlocks = collectStructuredBlocks(
+      Array.isArray(node.kids) ? node.kids : [],
+      depth + 1
+    ).filter((child) => child !== itemText);
+
+    if (!itemText) {
+      return childBlocks;
+    }
+
+    return [`${indent}- ${itemText}`, ...childBlocks];
+  }
+
+  if (type === "paragraph" || type === "caption") {
+    if (ownText) {
+      return [ownText];
+    }
+
+    return collectStructuredBlocks(getChildNodes(node), depth);
+  }
+
+  const childBlocks = collectStructuredBlocks(getChildNodes(node), depth);
+
+  if (!childBlocks.length && ownText) {
+    return [ownText];
+  }
+
+  return childBlocks;
+}
+
+function joinStructuredBlocks(blocks) {
+  return blocks
+    .map((block) => String(block || "").trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function buildStructuredText(outputs) {
+  if (outputs.json && Array.isArray(outputs.json.kids)) {
+    const structured = joinStructuredBlocks(collectStructuredBlocks(outputs.json.kids));
+    if (structured) {
+      return structured;
+    }
+  }
+
+  return normalizeTextBlock(outputs.text || outputs.markdown || outputs.html || "", {
+    collapseLineBreaks: false,
+  });
+}
+
+function buildPlainText(outputs) {
+  return normalizeTextBlock(outputs.text || outputs.markdown || outputs.html || "", {
+    collapseLineBreaks: false,
+  });
 }
 
 function buildDownloadFileName(fileName, suffix) {
@@ -102,10 +329,11 @@ async function readGeneratedOutputs(outputDir) {
   };
 }
 
-function buildDownloads(fileMetadata, outputs) {
+function buildDownloads(fileMetadata, outputs, selectedFormats) {
+  const selected = new Set(Array.isArray(selectedFormats) ? selectedFormats : DEFAULT_OUTPUT_FORMATS);
   const downloads = [];
 
-  if (outputs.markdown) {
+  if (outputs.markdown && selected.has("markdown")) {
     downloads.push({
       key: "markdown",
       label: "Markdown",
@@ -115,7 +343,7 @@ function buildDownloads(fileMetadata, outputs) {
     });
   }
 
-  if (outputs.html) {
+  if (outputs.html && selected.has("html")) {
     downloads.push({
       key: "html",
       label: "HTML",
@@ -125,7 +353,7 @@ function buildDownloads(fileMetadata, outputs) {
     });
   }
 
-  if (outputs.text) {
+  if (outputs.text && selected.has("text")) {
     downloads.push({
       key: "text",
       label: "Text",
@@ -135,7 +363,7 @@ function buildDownloads(fileMetadata, outputs) {
     });
   }
 
-  if (outputs.json) {
+  if (outputs.json && selected.has("json")) {
     downloads.push({
       key: "json",
       label: "JSON",
@@ -154,15 +382,17 @@ async function runOpenDataLoaderPdf({ file, fileMetadata, config = {} }) {
   }
 
   const outputDir = await createTempDir("opendataloader-output-");
-  const outputFormats = normalizeOutputFormats(config);
+  const requestedOutputFormats = normalizeOutputFormats(config);
+  const internalOutputFormats = [...new Set(["json", "text", ...requestedOutputFormats])];
+  const useStructTree = config.useStructTree !== false;
 
   try {
     await runOpenDataLoaderCli([file.path], {
       outputDir,
-      format: outputFormats,
+      format: internalOutputFormats,
       quiet: config.quiet !== false,
       keepLineBreaks: Boolean(config.keepLineBreaks),
-      useStructTree: Boolean(config.useStructTree),
+      useStructTree,
       contentSafetyOff: config.contentSafetyOff || undefined,
       replaceInvalidChars:
         typeof config.replaceInvalidChars === "string" && config.replaceInvalidChars.length > 0
@@ -172,10 +402,12 @@ async function runOpenDataLoaderPdf({ file, fileMetadata, config = {} }) {
     });
 
     const outputs = await readGeneratedOutputs(outputDir);
-    const primaryText =
-      outputs.markdown ||
-      outputs.text ||
+    const structuredText = buildStructuredText(outputs);
+    const plainText =
+      buildPlainText(outputs) ||
+      structuredText ||
       (outputs.json ? JSON.stringify(outputs.json, null, 2) : "");
+    const primaryText = structuredText || plainText;
 
     return {
       stage: "opendataloader_pdf",
@@ -183,16 +415,19 @@ async function runOpenDataLoaderPdf({ file, fileMetadata, config = {} }) {
       request: {
         engine: "@opendataloader/pdf",
         options: {
-          format: outputFormats,
+          format: requestedOutputFormats,
+          internalFormat: internalOutputFormats,
           keepLineBreaks: Boolean(config.keepLineBreaks),
-          useStructTree: Boolean(config.useStructTree),
+          useStructTree,
           contentSafetyOff: config.contentSafetyOff || "",
           replaceInvalidChars: config.replaceInvalidChars || "",
           quiet: config.quiet !== false,
         },
       },
       content: {
-        text: outputs.text || primaryText,
+        text: structuredText || plainText,
+        plainText,
+        structuredText,
         html: outputs.html || "",
         markdown: outputs.markdown || "",
       },
@@ -200,9 +435,10 @@ async function runOpenDataLoaderPdf({ file, fileMetadata, config = {} }) {
       raw: outputs.json || {
         markdown: outputs.markdown || "",
         html: outputs.html || "",
-        text: outputs.text || "",
+        text: plainText,
+        structuredText,
       },
-      downloads: buildDownloads(fileMetadata, outputs),
+      downloads: buildDownloads(fileMetadata, outputs, requestedOutputFormats),
       elements: Array.isArray(outputs.json?.kids) ? outputs.json.kids : [],
       pageCount: Number(outputs.json?.["number of pages"] || fileMetadata.pageCount || 0) || null,
     };

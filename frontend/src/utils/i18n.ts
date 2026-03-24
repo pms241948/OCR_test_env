@@ -371,6 +371,10 @@ en["results.opendataloader"] = "OpenDataLoader PDF";
 en["stage.opendataloader"] = "OpenDataLoader PDF";
 en["opendataloader.note"] =
   "OpenDataLoader runs locally on the backend, accepts PDF uploads only, and can generate Markdown, HTML, text, and JSON outputs.";
+en["opendataloader.view.structured"] = "Structured Text";
+en["opendataloader.view.plain"] = "Plain Text";
+en["opendataloader.view.html"] = "Rendered HTML";
+en["opendataloader.view.markdown"] = "Markdown";
 en["section.postprocess.subtitle"] =
   "Merge any selected combination of OpenDataLoader, Upstage, and Vision OCR into one refined final text.";
 en["help.postprocess_hardcoded_prompts"] =
@@ -397,6 +401,10 @@ ko["results.opendataloader"] = "OpenDataLoader PDF";
 ko["stage.opendataloader"] = "OpenDataLoader PDF";
 ko["opendataloader.note"] =
   "OpenDataLoader\uB294 \uBC31\uC5D4\uB4DC\uC5D0\uC11C \uB85C\uCEEC\uB85C \uC2E4\uD589\uB418\uBA70 PDF \uD30C\uC77C\uB9CC \uCC98\uB9AC\uD569\uB2C8\uB2E4. Markdown, HTML, text, JSON \uACB0\uACFC\uB97C \uC0DD\uC131\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.";
+ko["opendataloader.view.structured"] = "\uAD6C\uC870\uD654 \uD14D\uC2A4\uD2B8";
+ko["opendataloader.view.plain"] = "\uC77C\uBC18 \uD14D\uC2A4\uD2B8";
+ko["opendataloader.view.html"] = "\uB80C\uB354\uB9C1 HTML";
+ko["opendataloader.view.markdown"] = "Markdown";
 ko["section.postprocess.subtitle"] =
   "OpenDataLoader, Upstage, Vision OCR \uC911 \uC120\uD0DD\uD55C \uACB0\uACFC\uB4E4\uC744 \uD1B5\uD569\uD574 \uD558\uB098\uC758 \uC815\uC81C\uB41C \uCD5C\uC885 \uD14D\uC2A4\uD2B8\uB85C \uB9CC\uB4ED\uB2C8\uB2E4.";
 ko["help.postprocess_hardcoded_prompts"] =

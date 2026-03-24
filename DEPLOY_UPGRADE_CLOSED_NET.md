@@ -1,6 +1,12 @@
 # Closed-Net Docker Upgrade Guide
 
-This document describes how to upgrade an existing closed-network deployment by replacing only the Docker images and recreating the containers.
+This document describes how to upgrade an existing closed-network deployment by replacing Docker images and recreating the containers.
+
+Important:
+
+- `docker load` only imports the new images
+- it does not switch an already running container to the new image
+- the upgrade is complete only after the old containers are stopped, removed, and started again with the new image tags
 
 The current application keeps user data outside the containers:
 
@@ -48,18 +54,38 @@ docker run -d \
 
 ## 1. Build New Images On A Connected Machine
 
-Run from the project root:
+Run from the project root.
+
+Recommended flow:
 
 ```bash
-docker build -t ocr-compare-backend:<version> ./backend
-docker build -t ocr-compare-frontend:<version> ./frontend
+docker compose up -d --build
+docker compose ps
+```
+
+This verifies the current code before exporting the release images.
+
+Then tag the compose-built images:
+
+```bash
+docker image tag ocr_test_env-backend ocr-compare-backend:<version>
+docker image tag ocr_test_env-frontend ocr-compare-frontend:<version>
 ```
 
 Example:
 
 ```bash
-docker build -t ocr-compare-backend:1.3.0 ./backend
-docker build -t ocr-compare-frontend:1.3.0 ./frontend
+docker image tag ocr_test_env-backend ocr-compare-backend:1.3.0
+docker image tag ocr_test_env-frontend ocr-compare-frontend:1.3.0
+```
+
+If you prefer building without compose, the following also works:
+
+```bash
+docker build -t ocr_test_env-backend ./backend
+docker build -t ocr_test_env-frontend ./frontend
+docker image tag ocr_test_env-backend ocr-compare-backend:<version>
+docker image tag ocr_test_env-frontend ocr-compare-frontend:<version>
 ```
 
 Check the built images:
@@ -71,7 +97,7 @@ docker images | grep ocr-compare
 ## 2. Export The Images
 
 ```bash
-docker save -o ocr-compare-<version>.tar \
+docker save -o ocr-compare-images-v<version>.tar \
   ocr-compare-backend:<version> \
   ocr-compare-frontend:<version>
 ```
@@ -79,14 +105,14 @@ docker save -o ocr-compare-<version>.tar \
 Example:
 
 ```bash
-docker save -o ocr-compare-1.3.0.tar \
+docker save -o ocr-compare-images-v1.3.0.tar \
   ocr-compare-backend:1.3.0 \
   ocr-compare-frontend:1.3.0
 ```
 
 Transfer these files to the closed-network server:
 
-- `ocr-compare-<version>.tar`
+- `ocr-compare-images-v<version>.tar`
 - updated `.env` if you changed it
 
 ## 3. Pre-Check On The Closed-Network Server
@@ -112,13 +138,13 @@ docker images | grep ocr-compare
 ## 4. Load The New Images
 
 ```bash
-docker load -i ocr-compare-<version>.tar
+docker load -i ocr-compare-images-v<version>.tar
 ```
 
 Example:
 
 ```bash
-docker load -i ocr-compare-1.3.0.tar
+docker load -i ocr-compare-images-v1.3.0.tar
 ```
 
 Confirm the new tags:
@@ -128,6 +154,8 @@ docker images | grep ocr-compare
 ```
 
 ## 5. Replace The Running Containers
+
+This is the actual upgrade step.
 
 Stop the old containers:
 
@@ -189,6 +217,8 @@ docker run -d \
   ocr-compare-frontend:1.3.0
 ```
 
+If you skip the `stop` and `rm` steps, the old containers keep running with the old image layers even though the new image was loaded successfully.
+
 ## 6. Validate The Upgrade
 
 Check container status:
@@ -227,17 +257,25 @@ After opening `http://<server-ip>:8082`, verify these flows:
 5. `OpenDataLoader PDF` tab is visible.
 6. Upload a PDF and run `OpenDataLoader`.
 7. Confirm the OpenDataLoader result is visible in the results workspace.
-8. Confirm result download buttons work for Markdown, HTML, Text, or JSON.
-9. Confirm `Postprocess LLM` can be configured to include or exclude:
-   - OpenDataLoader
-   - Upstage
-   - Vision
+8. Confirm the OpenDataLoader result can be viewed as:
+   - structured text
+   - plain text
+   - rendered HTML
+   - markdown
+9. Confirm result download buttons work for Markdown, HTML, Text, or JSON.
+10. Confirm `Postprocess LLM` can be configured to include or exclude:
+    - OpenDataLoader
+    - Upstage
+    - Vision
 
 Notes for this release:
 
 - OpenDataLoader runs inside the backend container.
 - No host-level Java installation is needed if you use the updated backend image.
 - OpenDataLoader currently supports PDF uploads only in this app.
+- The OpenDataLoader API endpoint is `POST /api/ocr/opendataloader`.
+- OpenDataLoader runtime execution does not require external internet access.
+- API request and response examples are documented in [OPENDATALOADER_API.md](/C:/Users/pms24/Desktop/OCR_test_env/OPENDATALOADER_API.md).
 
 ## 8. Rollback
 
@@ -273,7 +311,7 @@ docker run -d \
 ## 9. Quick Upgrade Summary
 
 ```bash
-docker load -i ocr-compare-<version>.tar
+docker load -i ocr-compare-images-v<version>.tar
 
 docker stop ocr-frontend ocr-backend
 docker rm ocr-frontend ocr-backend

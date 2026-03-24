@@ -129,6 +129,8 @@ export type StageResponse = {
   statusCode: number;
   content?: {
     text?: string;
+    plainText?: string;
+    structuredText?: string;
     html?: string;
     markdown?: string;
   };

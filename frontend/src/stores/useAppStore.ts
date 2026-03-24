@@ -108,9 +108,9 @@ const defaultUpstageConfig: UpstageConfig = {
 };
 
 const defaultOpendataloaderConfig: OpendataloaderConfig = {
-  outputFormats: ["json", "markdown", "html"],
+  outputFormats: ["json", "text", "markdown", "html"],
   keepLineBreaks: false,
-  useStructTree: false,
+  useStructTree: true,
   contentSafetyOff: "",
   replaceInvalidChars: "",
 };

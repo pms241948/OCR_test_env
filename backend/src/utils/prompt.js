@@ -94,8 +94,9 @@ function buildPostprocessPrompt({
     vision: true,
   };
   const opendataloaderText =
-    opendataloaderResult?.content?.markdown ||
+    opendataloaderResult?.content?.structuredText ||
     opendataloaderResult?.content?.text ||
+    opendataloaderResult?.content?.plainText ||
     opendataloaderResult?.text ||
     "";
   const upstageText =

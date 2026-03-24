@@ -3,6 +3,7 @@ import axios from "axios";
 
 import { DocumentPreview } from "../components/DocumentPreview";
 import { JsonViewer } from "../components/JsonViewer";
+import { OpendataloaderResultPane } from "../components/OpendataloaderResultPane";
 import { ResultPane } from "../components/ResultPane";
 import { RoiSelector } from "../components/RoiSelector";
 import { SectionCard } from "../components/SectionCard";
@@ -88,6 +89,7 @@ type ResultPaneData = {
   referencePreview?: string;
   errorMessage?: string;
   downloads?: DownloadableResultFile[];
+  opendataloaderResult?: StageResponse | null;
 };
 
 const PRESETS_PER_PAGE = 5;
@@ -295,7 +297,13 @@ function resolveOpendataloaderText(result: StageResponse | null): string {
     return "";
   }
 
-  return result.content?.markdown || result.content?.text || result.text || "";
+  return (
+    result.content?.structuredText ||
+    result.content?.plainText ||
+    result.content?.text ||
+    result.text ||
+    ""
+  );
 }
 
 function getSelectedPostprocessSources(
@@ -589,6 +597,7 @@ export function DashboardPage() {
       raw: results.opendataloader?.raw,
       statusCode: results.opendataloader?.statusCode,
       downloads: results.opendataloader?.downloads,
+      opendataloaderResult: results.opendataloader,
       errorMessage:
         runStatus.opendataloader.state === "error" ? runStatus.opendataloader.message : undefined,
     },
@@ -693,6 +702,48 @@ export function DashboardPage() {
       ? resultsView
       : null;
   const focusedPane = focusedPaneKey ? resultPaneMap[focusedPaneKey] : null;
+  const renderWorkspacePane = (
+    pane: ResultPaneData,
+    options?: {
+      key?: string;
+      className?: string;
+      textareaClassName?: string;
+      contentClassName?: string;
+    }
+  ) => {
+    if (pane.opendataloaderResult) {
+      return (
+        <OpendataloaderResultPane
+          key={options?.key || pane.title}
+          title={pane.title}
+          result={pane.opendataloaderResult}
+          statusCode={pane.statusCode}
+          downloads={pane.downloads}
+          errorMessage={pane.errorMessage}
+          className={options?.className}
+          textareaClassName={options?.textareaClassName}
+          contentClassName={options?.contentClassName}
+        />
+      );
+    }
+
+    return (
+      <ResultPane
+        key={options?.key || pane.title}
+        title={pane.title}
+        text={pane.text}
+        raw={pane.raw}
+        statusCode={pane.statusCode}
+        promptPreview={pane.promptPreview}
+        referencePreview={pane.referencePreview}
+        downloads={pane.downloads}
+        errorMessage={pane.errorMessage}
+        className={options?.className}
+        textareaClassName={options?.textareaClassName}
+        contentClassName={options?.contentClassName}
+      />
+    );
+  };
   const workspaceMenuItems: Array<{
     key: WorkspaceMenuKey;
     step: string;
@@ -2696,20 +2747,12 @@ export function DashboardPage() {
 
             <div className="grid gap-4 xl:grid-cols-2">
               {comparePanes.map((pane) => (
-                <ResultPane
-                  key={pane.title}
-                  title={pane.title}
-                  text={pane.text}
-                  raw={pane.raw}
-                  statusCode={pane.statusCode}
-                  promptPreview={pane.promptPreview}
-                  referencePreview={pane.referencePreview}
-                  downloads={pane.downloads}
-                  errorMessage={pane.errorMessage}
-                  className="min-h-[42rem]"
-                  textareaClassName="h-[30rem] md:h-[36rem] xl:h-[42rem]"
-                  contentClassName="space-y-4"
-                />
+                renderWorkspacePane(pane, {
+                  key: pane.title,
+                  className: "min-h-[42rem]",
+                  textareaClassName: "h-[30rem] md:h-[36rem] xl:h-[42rem]",
+                  contentClassName: "space-y-4",
+                })
               ))}
             </div>
           </div>
@@ -2749,19 +2792,12 @@ export function DashboardPage() {
 
         {focusedPane ? (
           <div className="space-y-4">
-            <ResultPane
-              title={focusedPane.title}
-              text={focusedPane.text}
-              raw={focusedPane.raw}
-              statusCode={focusedPane.statusCode}
-              promptPreview={focusedPane.promptPreview}
-              referencePreview={focusedPane.referencePreview}
-              downloads={focusedPane.downloads}
-              errorMessage={focusedPane.errorMessage}
-              className="min-h-[48rem]"
-              textareaClassName="h-[34rem] md:h-[40rem] xl:h-[48rem]"
-              contentClassName="space-y-4"
-            />
+            {renderWorkspacePane(focusedPane, {
+              key: focusedPane.title,
+              className: "min-h-[48rem]",
+              textareaClassName: "h-[34rem] md:h-[40rem] xl:h-[48rem]",
+              contentClassName: "space-y-4",
+            })}
 
             {focusedPaneKey === "upstage" ? (
               <div className="grid gap-4 xl:grid-cols-2">
