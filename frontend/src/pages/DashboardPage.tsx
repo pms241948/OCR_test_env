@@ -8,6 +8,7 @@ import { RoiSelector } from "../components/RoiSelector";
 import { SectionCard } from "../components/SectionCard";
 import {
   createVisionModelConfig,
+  defaults,
   getVisionModelDisplayLabel,
   normalizeVisionRegistry,
   useAppStore,
@@ -20,6 +21,7 @@ import {
   fetchHistoryApi,
   fetchPresetsApi,
   runAllApi,
+  runOpenDataLoaderApi,
   runPostprocessApi,
   testPostprocessCallApi,
   testUpstageCallApi,
@@ -44,6 +46,7 @@ import {
   UPLOAD_LIBRARY_LIMIT_ERROR,
 } from "../utils/uploadLibrary";
 import type {
+  DownloadableResultFile,
   FileMeta,
   HistoryRecord,
   PageRoiMap,
@@ -65,11 +68,17 @@ type RunStatus = {
 };
 
 type RunStatusMap = Record<StageKey, RunStatus>;
-type ResultWorkspaceView = "compare" | "upstage" | "vision" | "postprocess" | "insights";
+type ResultWorkspaceView =
+  | "compare"
+  | "opendataloader"
+  | "upstage"
+  | "vision"
+  | "postprocess"
+  | "insights";
 type CompareWorkspaceMode = "upstage_vision" | "vision_postprocess" | "upstage_postprocess" | "all";
 type ResultWorkspaceStage = Exclude<StageKey, "pipeline">;
 type WorkspaceMenuKey = "document" | "ocr_setup" | "run_center" | "results" | "library";
-type OcrSetupView = "upstage" | "vision" | "postprocess";
+type OcrSetupView = "opendataloader" | "upstage" | "vision" | "postprocess";
 type ResultPaneData = {
   title: string;
   text: string;
@@ -78,6 +87,7 @@ type ResultPaneData = {
   promptPreview?: string;
   referencePreview?: string;
   errorMessage?: string;
+  downloads?: DownloadableResultFile[];
 };
 
 const PRESETS_PER_PAGE = 5;
@@ -90,6 +100,7 @@ const INACTIVE_PILL_CLASS = "border-slate-300 bg-white text-slate-700 hover:bord
 
 function createInitialRunStatus(): RunStatusMap {
   return {
+    opendataloader: { state: "idle" },
     upstage: { state: "idle" },
     vision: { state: "idle" },
     postprocess: { state: "idle" },
@@ -279,6 +290,24 @@ function resolveUpstageText(result: StageResponse | null): string {
   return result.content?.markdown || result.content?.text || result.content?.html || "";
 }
 
+function resolveOpendataloaderText(result: StageResponse | null): string {
+  if (!result) {
+    return "";
+  }
+
+  return result.content?.markdown || result.content?.text || result.text || "";
+}
+
+function getSelectedPostprocessSources(
+  config: ReturnType<typeof useAppStore.getState>["postprocessConfig"]
+) {
+  return {
+    opendataloader: config.includeOpendataloader,
+    upstage: config.includeUpstage,
+    vision: config.includeVision,
+  };
+}
+
 function buildVisionResultTitle(language: AppLanguage, model: VisionModelConfig): string {
   const prefix = translate(language, "results.vision");
   return `${prefix} · ${getVisionModelDisplayLabel(model)}`;
@@ -312,11 +341,13 @@ function coerceVisionResult(
 }
 
 function buildBundle(config: {
+  opendataloader: ReturnType<typeof useAppStore.getState>["opendataloaderConfig"];
   upstage: ReturnType<typeof useAppStore.getState>["upstageConfig"];
   vision: ReturnType<typeof useAppStore.getState>["visionRegistry"];
   postprocess: ReturnType<typeof useAppStore.getState>["postprocessConfig"];
 }): StoredConfigBundle {
   return {
+    opendataloader: config.opendataloader,
     upstage: config.upstage,
     vision: config.vision,
     postprocess: config.postprocess,
@@ -331,6 +362,9 @@ function coerceBundle(input: unknown): StoredConfigBundle | null {
   const maybeBundle = input as Partial<StoredConfigBundle> & { vision?: unknown };
   if (maybeBundle.upstage && maybeBundle.vision && maybeBundle.postprocess) {
     return {
+      opendataloader:
+        (maybeBundle.opendataloader as StoredConfigBundle["opendataloader"]) ||
+        defaults.opendataloader,
       upstage: maybeBundle.upstage as StoredConfigBundle["upstage"],
       vision: normalizeVisionRegistry(maybeBundle.vision),
       postprocess: maybeBundle.postprocess as StoredConfigBundle["postprocess"],
@@ -351,6 +385,8 @@ function coerceStageResult(input: unknown): StageResponse | null {
 function getStageLabel(language: AppLanguage, stage: StageKey): string {
   const t = (key: string) => translate(language, key);
   switch (stage) {
+    case "opendataloader":
+      return t("stage.opendataloader");
     case "upstage":
       return t("stage.upstage");
     case "vision":
@@ -369,6 +405,8 @@ function getHistoryRunTypeLabel(language: AppLanguage, runType: string): string 
   switch (runType) {
     case "full_pipeline":
       return t("history.full_pipeline");
+    case "opendataloader":
+      return t("history.opendataloader");
     case "upstage":
       return t("history.upstage");
     case "vision_llm":
@@ -439,6 +477,7 @@ export function DashboardPage() {
   const {
     language,
     setLanguage,
+    opendataloaderConfig,
     upstageConfig,
     visionRegistry,
     postprocessConfig,
@@ -446,6 +485,7 @@ export function DashboardPage() {
     results,
     presets,
     history,
+    updateOpendataloaderConfig,
     updateUpstageConfig,
     setVisionRegistry,
     updateVisionModel,
@@ -505,20 +545,25 @@ export function DashboardPage() {
   const currentBundle = useMemo(
     () =>
       buildBundle({
+        opendataloader: opendataloaderConfig,
         upstage: upstageConfig,
         vision: visionRegistry,
         postprocess: postprocessConfig,
       }),
-    [postprocessConfig, upstageConfig, visionRegistry]
+    [opendataloaderConfig, postprocessConfig, upstageConfig, visionRegistry]
   );
   const resultsWorkspaceSubtitle =
     language === "ko"
       ? "등록한 Vision 모델 응답을 함께 비교하거나, 단계별 결과를 크게 확인할 수 있습니다."
-      : "Review registered Vision model responses together or open each stage in a larger workspace.";
+      : "Compare OpenDataLoader, Upstage, Vision, and postprocess outputs together or open each result in a larger workspace.";
   const workspaceTabs: Array<{ key: ResultWorkspaceView; label: string }> = [
     {
       key: "compare",
       label: language === "ko" ? "비교 화면" : "Compare",
+    },
+    {
+      key: "opendataloader",
+      label: t("results.opendataloader"),
     },
     {
       key: "upstage",
@@ -538,6 +583,15 @@ export function DashboardPage() {
     },
   ];
   const resultPaneMap: Record<ResultWorkspaceStage, ResultPaneData> = {
+    opendataloader: {
+      title: t("results.opendataloader"),
+      text: resolveOpendataloaderText(results.opendataloader),
+      raw: results.opendataloader?.raw,
+      statusCode: results.opendataloader?.statusCode,
+      downloads: results.opendataloader?.downloads,
+      errorMessage:
+        runStatus.opendataloader.state === "error" ? runStatus.opendataloader.message : undefined,
+    },
     upstage: {
       title: t("results.upstage"),
       text: resolveUpstageText(results.upstage),
@@ -611,11 +665,16 @@ export function DashboardPage() {
     };
   });
   const comparePanes: ResultPaneData[] = [
+    resultPaneMap.opendataloader,
     resultPaneMap.upstage,
     ...visionPaneEntries.map((entry) => entry.pane),
     resultPaneMap.postprocess,
   ];
   const ocrSetupTabs: Array<{ key: OcrSetupView; label: string }> = [
+    {
+      key: "opendataloader",
+      label: t("section.opendataloader.title"),
+    },
     {
       key: "upstage",
       label: t("section.upstage.title"),
@@ -630,7 +689,9 @@ export function DashboardPage() {
     },
   ];
   const focusedPaneKey: ResultWorkspaceStage | null =
-    resultsView === "upstage" || resultsView === "postprocess" ? resultsView : null;
+    resultsView === "opendataloader" || resultsView === "upstage" || resultsView === "postprocess"
+      ? resultsView
+      : null;
   const focusedPane = focusedPaneKey ? resultPaneMap[focusedPaneKey] : null;
   const workspaceMenuItems: Array<{
     key: WorkspaceMenuKey;
@@ -653,7 +714,7 @@ export function DashboardPage() {
       description:
         language === "ko"
           ? "Upstage, Vision, ROI, Postprocess를 한 흐름으로 조정합니다."
-          : "Tune Upstage, Vision, ROI, and postprocess in one workflow.",
+          : "Tune OpenDataLoader, Upstage, Vision, ROI, and postprocess in one workflow.",
     },
     {
       key: "run_center",
@@ -1025,6 +1086,30 @@ export function DashboardPage() {
     });
   }
 
+  async function handleRunOpenDataLoader() {
+    if (!selectedFile || !activeFileMeta) {
+      alert(t("alerts.upload_file_first"));
+      return;
+    }
+
+    if (activeFileMeta.mimeType !== "application/pdf") {
+      alert(t("alerts.opendataloader_pdf_only"));
+      return;
+    }
+
+    await executeStage("opendataloader", async () => {
+      const response = await runOpenDataLoaderApi(selectedFile, opendataloaderConfig);
+      setStageResult("opendataloader", response);
+      if (response.file) {
+        const nextMeta = mergeServerFileMeta(response.file, selectedFile, activeFileMeta);
+        setFileMeta(nextMeta);
+        if (activeDocumentId) {
+          updateUploadedDocumentMeta(activeDocumentId, nextMeta);
+        }
+      }
+    });
+  }
+
   async function handleRunVision() {
     if (!selectedFile) {
       alert(t("alerts.upload_file_first"));
@@ -1086,17 +1171,34 @@ export function DashboardPage() {
   }
 
   async function handleRunPostprocess() {
+    const selectedSources = getSelectedPostprocessSources(postprocessConfig);
+    const opendataloaderResult = results.opendataloader;
     const upstageResult = results.upstage;
     const visionResult = activeVisionResult;
 
-    if (!activeFileMeta || !upstageResult || !visionResult || visionResult.errorMessage) {
-      alert(t("alerts.run_upstage_and_vision_first"));
+    if (!activeFileMeta) {
+      alert(t("alerts.upload_file_first"));
+      return;
+    }
+
+    if (!selectedSources.opendataloader && !selectedSources.upstage && !selectedSources.vision) {
+      alert(t("alerts.select_postprocess_source_first"));
+      return;
+    }
+
+    if (
+      (selectedSources.opendataloader && !opendataloaderResult) ||
+      (selectedSources.upstage && !upstageResult) ||
+      (selectedSources.vision && (!visionResult || visionResult.errorMessage))
+    ) {
+      alert(t("alerts.run_selected_ocr_first"));
       return;
     }
 
     await executeStage("postprocess", async () => {
       const response = await runPostprocessApi({
         file: activeFileMeta,
+        opendataloaderResult,
         upstageResult,
         visionResult,
         config: postprocessConfig,
@@ -1120,6 +1222,18 @@ export function DashboardPage() {
       return;
     }
 
+    const selectedSources = getSelectedPostprocessSources(postprocessConfig);
+
+    if (!selectedSources.opendataloader && !selectedSources.upstage && !selectedSources.vision) {
+      alert(t("alerts.select_postprocess_source_first"));
+      return;
+    }
+
+    if ((activeFileMeta?.mimeType || selectedFile.type) !== "application/pdf" && selectedSources.opendataloader) {
+      alert(t("alerts.opendataloader_pdf_only"));
+      return;
+    }
+
     await executeStage("pipeline", async () => {
       const response = await runAllApi(selectedFile, currentBundle);
       const nextMeta = mergeServerFileMeta(response.file, selectedFile, activeFileMeta);
@@ -1127,8 +1241,9 @@ export function DashboardPage() {
       if (activeDocumentId) {
         updateUploadedDocumentMeta(activeDocumentId, nextMeta);
       }
+      setStageResult("opendataloader", response.opendataloader);
       setStageResult("upstage", response.upstage);
-      if (activeVisionModel) {
+      if (activeVisionModel && response.vision) {
         setVisionResults({
           [activeVisionModel.id]: buildVisionResult(activeVisionModel, response.vision),
         });
@@ -1136,8 +1251,9 @@ export function DashboardPage() {
         setVisionResults({});
       }
       setStageResult("postprocess", response.postprocess);
-      markStage("upstage", { state: "success" });
-      markStage("vision", { state: "success" });
+      markStage("opendataloader", response.opendataloader ? { state: "success" } : { state: "idle" });
+      markStage("upstage", response.upstage ? { state: "success" } : { state: "idle" });
+      markStage("vision", response.vision ? { state: "success" } : { state: "idle" });
       markStage("postprocess", { state: "success" });
     });
   }
@@ -1270,6 +1386,8 @@ export function DashboardPage() {
     if (bundle) {
       nextVisionRegistry = bundle.vision;
       applyConfigBundle(bundle);
+    } else if (item.runType === "opendataloader") {
+      updateOpendataloaderConfig(item.config as Partial<typeof opendataloaderConfig>);
     } else if (item.runType === "upstage") {
       updateUpstageConfig(item.config as Partial<typeof upstageConfig>);
     } else if (item.runType === "vision_llm") {
@@ -1282,6 +1400,8 @@ export function DashboardPage() {
     const result = item.result as Record<string, unknown>;
     const nextRunStatus = createInitialRunStatus();
     if (item.runType === "full_pipeline") {
+      const pipelineOpenDataLoaderResult = coerceStageResult(result.opendataloader);
+      setStageResult("opendataloader", pipelineOpenDataLoaderResult);
       setStageResult("upstage", coerceStageResult(result.upstage));
       const pipelineVisionRegistry = nextVisionRegistry || visionRegistry;
       const pipelineVisionModel =
@@ -1297,10 +1417,20 @@ export function DashboardPage() {
         setVisionResults({});
       }
       setStageResult("postprocess", coerceStageResult(result.postprocess));
-      nextRunStatus.upstage = { state: "success" };
-      nextRunStatus.vision = { state: "success" };
+      if (pipelineOpenDataLoaderResult) {
+        nextRunStatus.opendataloader = { state: "success" };
+      }
+      if (result.upstage) {
+        nextRunStatus.upstage = { state: "success" };
+      }
+      if (pipelineVisionResult) {
+        nextRunStatus.vision = { state: "success" };
+      }
       nextRunStatus.postprocess = { state: "success" };
       nextRunStatus.pipeline = { state: "success" };
+    } else if (item.runType === "opendataloader") {
+      setStageResult("opendataloader", coerceStageResult(item.result));
+      nextRunStatus.opendataloader = { state: "success" };
     } else if (item.runType === "upstage") {
       setStageResult("upstage", coerceStageResult(item.result));
       nextRunStatus.upstage = { state: "success" };
@@ -1398,6 +1528,7 @@ export function DashboardPage() {
   }
 
   const stageActions: [StageKey, () => Promise<void>, string][] = [
+    ["opendataloader", handleRunOpenDataLoader, t("button.run_opendataloader")],
     ["upstage", handleRunUpstage, t("button.run_upstage")],
     ["vision", handleRunVision, t("button.run_vision")],
     ["postprocess", handleRunPostprocess, t("button.run_postprocess")],
@@ -1535,7 +1666,7 @@ export function DashboardPage() {
           subtitle={
             language === "ko"
               ? "Upstage, Vision, Postprocess 설정을 탭으로 전환하면서 조정합니다."
-              : "Switch between Upstage, Vision, and Postprocess settings with tabs."
+              : "Switch between OpenDataLoader, Upstage, Vision, and Postprocess settings with tabs."
           }
         >
           <div className="flex flex-wrap gap-3">
@@ -1555,6 +1686,76 @@ export function DashboardPage() {
             ))}
           </div>
         </SectionCard>
+
+        {ocrSetupView === "opendataloader" ? (
+        <SectionCard
+          title={t("section.opendataloader.title")}
+          subtitle={t("section.opendataloader.subtitle")}
+        >
+          <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
+            {t("opendataloader.note")}
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-slate-700">{t("field.output_formats")}</p>
+            <div className="flex flex-wrap gap-3">
+              {(["json", "markdown", "html", "text"] as const).map((format) => {
+                const active = opendataloaderConfig.outputFormats.includes(format);
+                return (
+                  <button
+                    key={format}
+                    type="button"
+                    onClick={() =>
+                      updateOpendataloaderConfig({
+                        outputFormats: active
+                          ? opendataloaderConfig.outputFormats.filter((item) => item !== format)
+                          : [...opendataloaderConfig.outputFormats, format],
+                      })
+                    }
+                    className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
+                      active ? ACTIVE_PILL_CLASS : INACTIVE_PILL_CLASS
+                    }`}
+                  >
+                    {format}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <Toggle
+              checked={opendataloaderConfig.keepLineBreaks}
+              onChange={(checked) => updateOpendataloaderConfig({ keepLineBreaks: checked })}
+              label={t("toggle.keep_line_breaks")}
+            />
+            <Toggle
+              checked={opendataloaderConfig.useStructTree}
+              onChange={(checked) => updateOpendataloaderConfig({ useStructTree: checked })}
+              label={t("toggle.use_struct_tree")}
+            />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <InputField
+              label={t("field.content_safety_off")}
+              value={opendataloaderConfig.contentSafetyOff}
+              onChange={(event) =>
+                updateOpendataloaderConfig({ contentSafetyOff: event.target.value })
+              }
+              placeholder="hidden-text,off-page"
+            />
+            <InputField
+              label={t("field.replace_invalid_chars")}
+              value={opendataloaderConfig.replaceInvalidChars}
+              onChange={(event) =>
+                updateOpendataloaderConfig({ replaceInvalidChars: event.target.value })
+              }
+              placeholder={t("common.optional")}
+            />
+          </div>
+        </SectionCard>
+        ) : null}
 
         {ocrSetupView === "upstage" ? (
         <SectionCard title={t("section.upstage.title")} subtitle={t("section.upstage.subtitle")}>
@@ -2013,6 +2214,32 @@ export function DashboardPage() {
         title={t("section.postprocess.title")}
         subtitle={t("section.postprocess.subtitle")}
       >
+        <div className="space-y-3 rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+          <div>
+            <p className="text-sm font-semibold text-ink">{t("section.postprocess_sources.title")}</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {t("section.postprocess_sources.subtitle")}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <Toggle
+              checked={postprocessConfig.includeOpendataloader}
+              onChange={(checked) => updatePostprocessConfig({ includeOpendataloader: checked })}
+              label={t("results.opendataloader")}
+            />
+            <Toggle
+              checked={postprocessConfig.includeUpstage}
+              onChange={(checked) => updatePostprocessConfig({ includeUpstage: checked })}
+              label={t("results.upstage")}
+            />
+            <Toggle
+              checked={postprocessConfig.includeVision}
+              onChange={(checked) => updatePostprocessConfig({ includeVision: checked })}
+              label={t("results.vision")}
+            />
+          </div>
+        </div>
+
         <div className="grid gap-4 md:grid-cols-2">
           <InputField
             label={t("field.postprocess_url")}
@@ -2464,7 +2691,7 @@ export function DashboardPage() {
             <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
               {language === "ko"
                 ? `등록된 Vision 모델 ${visionRegistry.models.length}개가 각각 독립 실행된 결과입니다. Postprocess와 Full Pipeline은 현재 활성 탭 ${activeVisionDisplayLabel} 기준으로 동작합니다.`
-                : `${visionRegistry.models.length} registered Vision models run independently. Postprocess and Full Pipeline use the current active tab, ${activeVisionDisplayLabel}.`}
+                : `${visionRegistry.models.length} registered Vision models run independently. Postprocess and Full Pipeline use the currently selected OCR sources and the active Vision tab, ${activeVisionDisplayLabel}.`}
             </div>
 
             <div className="grid gap-4 xl:grid-cols-2">
@@ -2477,6 +2704,7 @@ export function DashboardPage() {
                   statusCode={pane.statusCode}
                   promptPreview={pane.promptPreview}
                   referencePreview={pane.referencePreview}
+                  downloads={pane.downloads}
                   errorMessage={pane.errorMessage}
                   className="min-h-[42rem]"
                   textareaClassName="h-[30rem] md:h-[36rem] xl:h-[42rem]"
@@ -2492,7 +2720,7 @@ export function DashboardPage() {
             <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
               {language === "ko"
                 ? `현재 활성 Vision 탭은 ${activeVisionDisplayLabel}이며, Postprocess와 Full Pipeline이 이 탭의 결과를 사용합니다.`
-                : `The active Vision tab is ${activeVisionDisplayLabel}. Postprocess and Full Pipeline use this tab's result.`}
+                : `The active Vision tab is ${activeVisionDisplayLabel}. Postprocess and Full Pipeline use this tab's result when Vision input is enabled.`}
             </div>
 
             <div className="grid gap-4 xl:grid-cols-2">
@@ -2528,6 +2756,7 @@ export function DashboardPage() {
               statusCode={focusedPane.statusCode}
               promptPreview={focusedPane.promptPreview}
               referencePreview={focusedPane.referencePreview}
+              downloads={focusedPane.downloads}
               errorMessage={focusedPane.errorMessage}
               className="min-h-[48rem]"
               textareaClassName="h-[34rem] md:h-[40rem] xl:h-[48rem]"
@@ -2567,6 +2796,10 @@ export function DashboardPage() {
                 </React.Fragment>
               );
             })}
+            <JsonViewer
+              label={`${t("results.opendataloader")} ${language === "ko" ? "원본 JSON" : "Raw JSON"}`}
+              data={results.opendataloader?.raw || {}}
+            />
             <JsonViewer
               label={t("results.upstage_summary")}
               data={{

@@ -1,4 +1,8 @@
-const { runPostprocessLlm } = require("./postprocessService");
+const { runOpenDataLoaderPdf } = require("./opendataloaderService");
+const {
+  resolvePostprocessSourceSelection,
+  runPostprocessLlm,
+} = require("./postprocessService");
 const { runUpstageDocumentParse } = require("./upstageService");
 const { runVisionOcr } = require("./visionLlmService");
 
@@ -19,25 +23,39 @@ function resolvePipelineVisionConfig(input) {
 }
 
 async function runFullPipeline({ file, fileMetadata, config }) {
-  const upstage = await runUpstageDocumentParse({
-    file,
-    fileMetadata,
-    config: config.upstage || {},
-  });
+  const sourceSelection = resolvePostprocessSourceSelection(config.postprocess || {});
+  const upstage = sourceSelection.upstage
+    ? await runUpstageDocumentParse({
+        file,
+        fileMetadata,
+        config: config.upstage || {},
+      })
+    : null;
+  const opendataloader = sourceSelection.opendataloader
+    ? await runOpenDataLoaderPdf({
+        file,
+        fileMetadata,
+        config: config.opendataloader || {},
+      })
+    : null;
   const pipelineVisionConfig = resolvePipelineVisionConfig(config.vision);
-  const vision = await runVisionOcr({
-    file,
-    fileMetadata,
-    config: pipelineVisionConfig,
-  });
+  const vision = sourceSelection.vision
+    ? await runVisionOcr({
+        file,
+        fileMetadata,
+        config: pipelineVisionConfig,
+      })
+    : null;
   const postprocess = await runPostprocessLlm({
     config: config.postprocess || {},
     fileMetadata,
+    opendataloaderResult: opendataloader,
     upstageResult: upstage,
     visionResult: vision,
   });
 
   return {
+    opendataloader,
     upstage,
     vision,
     postprocess,

@@ -351,6 +351,56 @@ ko["help.vision_hardcoded_prompts"] =
   "\uCF1C\uC9C0\uBA74 OCR \uC804\uC6A9 \uC2DC\uC2A4\uD15C \uADDC\uCE59, \uBB38\uC11C \uBA54\uD0C0\uB370\uC774\uD130, \uBC94\uC704 \uC815\uBCF4, \uCD9C\uB825 \uC694\uAD6C\uC0AC\uD56D, \uD0DC\uADF8 \uAE30\uBC18 \uCD94\uCD9C \uAC00\uB4DC\uAC00 \uC790\uB3D9\uC73C\uB85C \uCD94\uAC00\uB429\uB2C8\uB2E4. \uB044\uBA74 \uC0AC\uC6A9\uC790\uAC00 \uC785\uB825\uD55C \uD504\uB86C\uD504\uD2B8 \uD544\uB4DC\uC640 \uC774\uBBF8\uC9C0\uB9CC \uC804\uC1A1\uB429\uB2C8\uB2E4. Qwen \uACC4\uC5F4\uC740 \uB044\uBA74 \uC124\uBA85\uD615 \uC751\uB2F5\uC774 \uB2E4\uC2DC \uC11E\uC77C \uC218 \uC788\uC2B5\uB2C8\uB2E4.";
 ko["help.postprocess_hardcoded_prompts"] =
   "\uCF1C\uC9C0\uBA74 OCR \uACB0\uACFC \uD1B5\uD569 \uC9C0\uC2DC\uBB38\uACFC \uCD5C\uC885 \uD14D\uC2A4\uD2B8\uB9CC \uBC18\uD658\uD558\uB294 \uADDC\uCE59\uC774 \uC790\uB3D9 \uCD94\uAC00\uB429\uB2C8\uB2E4. \uB044\uBA74 \uADF8 \uC790\uB3D9 \uADDC\uCE59\uC744 \uBE7C\uACE0, \uC0AC\uC6A9\uC790 \uD504\uB86C\uD504\uD2B8 \uD544\uB4DC\uC640 \uCD5C\uC18C OCR \uC18C\uC2A4 \uD398\uC774\uB85C\uB4DC\uB9CC \uBCF4\uB0C5\uB2C8\uB2E4.";
+en["alerts.run_selected_ocr_first"] = "Run the selected OCR sources first.";
+en["alerts.select_postprocess_source_first"] =
+  "Select at least one OCR source for postprocess.";
+en["alerts.opendataloader_pdf_only"] = "OpenDataLoader PDF parsing only supports PDF files.";
+en["section.opendataloader.title"] = "OpenDataLoader PDF";
+en["section.opendataloader.subtitle"] =
+  "Parse uploaded PDFs locally with OpenDataLoader and keep the result available for download or postprocess.";
+en["section.postprocess_sources.title"] = "OCR Input Sources";
+en["section.postprocess_sources.subtitle"] =
+  "Choose which OCR results should be sent to the postprocess LLM.";
+en["field.content_safety_off"] = "Content Safety Off";
+en["field.replace_invalid_chars"] = "Replace Invalid Chars";
+en["toggle.keep_line_breaks"] = "Keep Line Breaks";
+en["toggle.use_struct_tree"] = "Use Struct Tree";
+en["button.run_opendataloader"] = "Run OpenDataLoader";
+en["history.opendataloader"] = "OpenDataLoader";
+en["results.opendataloader"] = "OpenDataLoader PDF";
+en["stage.opendataloader"] = "OpenDataLoader PDF";
+en["opendataloader.note"] =
+  "OpenDataLoader runs locally on the backend, accepts PDF uploads only, and can generate Markdown, HTML, text, and JSON outputs.";
+en["section.postprocess.subtitle"] =
+  "Merge any selected combination of OpenDataLoader, Upstage, and Vision OCR into one refined final text.";
+en["help.postprocess_hardcoded_prompts"] =
+  "On: adds automatic merge instructions and final-text-only rules. Off: sends your prompt fields with only the OCR sources you selected.";
+ko["alerts.run_selected_ocr_first"] =
+  "\uC120\uD0DD\uD55C OCR \uC18C\uC2A4\uB97C \uBA3C\uC800 \uC2E4\uD589\uD574 \uC8FC\uC138\uC694.";
+ko["alerts.select_postprocess_source_first"] =
+  "\uD6C4\uCC98\uB9AC\uC5D0 \uC0AC\uC6A9\uD560 OCR \uC18C\uC2A4\uB97C \uD55C \uAC1C \uC774\uC0C1 \uC120\uD0DD\uD574 \uC8FC\uC138\uC694.";
+ko["alerts.opendataloader_pdf_only"] =
+  "OpenDataLoader PDF \uD30C\uC2F1\uC740 PDF \uD30C\uC77C\uB9CC \uC9C0\uC6D0\uD569\uB2C8\uB2E4.";
+ko["section.opendataloader.title"] = "OpenDataLoader PDF";
+ko["section.opendataloader.subtitle"] =
+  "\uC5C5\uB85C\uB4DC\uD55C PDF\uB97C OpenDataLoader\uB85C \uB85C\uCEEC \uD30C\uC2F1\uD558\uACE0, \uACB0\uACFC\uB97C \uB2E4\uC6B4\uB85C\uB4DC\uD558\uAC70\uB098 postprocess\uC5D0 \uC5F0\uACB0\uD569\uB2C8\uB2E4.";
+ko["section.postprocess_sources.title"] = "OCR \uC785\uB825 \uC18C\uC2A4";
+ko["section.postprocess_sources.subtitle"] =
+  "\uD6C4\uCC98\uB9AC LLM\uC5D0 \uBCF4\uB0BC OCR \uACB0\uACFC\uB97C \uC120\uD0DD\uD569\uB2C8\uB2E4.";
+ko["field.content_safety_off"] = "Content Safety Off";
+ko["field.replace_invalid_chars"] = "\uBB38\uC790 \uB300\uCCB4";
+ko["toggle.keep_line_breaks"] = "\uC904\uBC14\uAFC8 \uC720\uC9C0";
+ko["toggle.use_struct_tree"] = "Struct Tree \uC0AC\uC6A9";
+ko["button.run_opendataloader"] = "OpenDataLoader \uC2E4\uD589";
+ko["history.opendataloader"] = "OpenDataLoader";
+ko["results.opendataloader"] = "OpenDataLoader PDF";
+ko["stage.opendataloader"] = "OpenDataLoader PDF";
+ko["opendataloader.note"] =
+  "OpenDataLoader\uB294 \uBC31\uC5D4\uB4DC\uC5D0\uC11C \uB85C\uCEEC\uB85C \uC2E4\uD589\uB418\uBA70 PDF \uD30C\uC77C\uB9CC \uCC98\uB9AC\uD569\uB2C8\uB2E4. Markdown, HTML, text, JSON \uACB0\uACFC\uB97C \uC0DD\uC131\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.";
+ko["section.postprocess.subtitle"] =
+  "OpenDataLoader, Upstage, Vision OCR \uC911 \uC120\uD0DD\uD55C \uACB0\uACFC\uB4E4\uC744 \uD1B5\uD569\uD574 \uD558\uB098\uC758 \uC815\uC81C\uB41C \uCD5C\uC885 \uD14D\uC2A4\uD2B8\uB85C \uB9CC\uB4ED\uB2C8\uB2E4.";
+ko["help.postprocess_hardcoded_prompts"] =
+  "\uCF1C\uC9C0\uBA74 \uC120\uD0DD\uD55C OCR \uC18C\uC2A4\uB97C \uAE30\uC900\uC73C\uB85C \uD1B5\uD569 \uC9C0\uC2DC\uBB38\uACFC \uCD5C\uC885 \uD14D\uC2A4\uD2B8\uB9CC \uBC18\uD658\uD558\uB294 \uADDC\uCE59\uC774 \uCD94\uAC00\uB429\uB2C8\uB2E4. \uB044\uBA74 \uC0AC\uC6A9\uC790 \uD504\uB86C\uD504\uD2B8\uC640 \uC120\uD0DD\uD55C OCR \uC18C\uC2A4 \uD398\uC774\uB85C\uB4DC\uB9CC \uBCF4\uB0C5\uB2C8\uB2E4.";
 
 export function translate(language: AppLanguage, key: string): string {
   return resources[language][key] || resources.en[key] || key;

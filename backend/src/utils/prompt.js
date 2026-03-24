@@ -82,48 +82,76 @@ function buildVisionPrompt({ fileMetadata, config, range, useHardcodedPrompts = 
 function buildPostprocessPrompt({
   fileMetadata,
   config,
+  opendataloaderResult,
   upstageResult,
   visionResult,
+  sourceSelection,
   useHardcodedPrompts = true,
 }) {
+  const selectedSources = sourceSelection || {
+    opendataloader: false,
+    upstage: true,
+    vision: true,
+  };
+  const opendataloaderText =
+    opendataloaderResult?.content?.markdown ||
+    opendataloaderResult?.content?.text ||
+    opendataloaderResult?.text ||
+    "";
   const upstageText =
     upstageResult?.content?.markdown ||
     upstageResult?.content?.text ||
     upstageResult?.text ||
     "";
   const visionText = visionResult?.text || "";
+  const payload = {
+    user_prompt: config.userPrompt || "",
+    source_selection: selectedSources,
+    reference_text: config.referenceEnabled ? config.referenceText || "" : "",
+  };
+
+  if (selectedSources.opendataloader) {
+    payload.opendataloader_ocr = opendataloaderText;
+  }
+
+  if (selectedSources.upstage) {
+    payload.upstage_ocr = upstageText;
+  }
+
+  if (selectedSources.vision) {
+    payload.vision_ocr = visionText;
+    payload.vision_range = visionResult?.range || {};
+  }
 
   if (!useHardcodedPrompts) {
-    return JSON.stringify(
-      {
-        user_prompt: config.userPrompt || "",
-        upstage_ocr: upstageText,
-        vision_ocr: visionText,
-        reference_text: config.referenceEnabled ? config.referenceText || "" : "",
-      },
-      null,
-      2
-    );
+    return JSON.stringify(payload, null, 2);
   }
 
   const lines = [
     config.userPrompt ||
-      "Compare the OCR outputs, reconcile differences, and return the best final text.",
+      "Compare the selected OCR outputs, reconcile differences, and return the best final text.",
     "",
     "Document metadata:",
     `- File name: ${fileMetadata.fileName || ""}`,
     `- MIME type: ${fileMetadata.mimeType || ""}`,
     `- Page count: ${fileMetadata.pageCount || ""}`,
     "",
-    "Vision range:",
-    JSON.stringify(visionResult?.range || {}, null, 2),
-    "",
-    "Upstage OCR result:",
-    upstageText,
-    "",
-    "Vision OCR result:",
-    visionText,
+    "Selected OCR inputs:",
+    JSON.stringify(selectedSources, null, 2),
   ];
+
+  if (selectedSources.opendataloader) {
+    lines.push("", "OpenDataLoader PDF result:", opendataloaderText);
+  }
+
+  if (selectedSources.upstage) {
+    lines.push("", "Upstage OCR result:", upstageText);
+  }
+
+  if (selectedSources.vision) {
+    lines.push("", "Vision range:", JSON.stringify(visionResult?.range || {}, null, 2));
+    lines.push("", "Vision OCR result:", visionText);
+  }
 
   if (config.referenceEnabled && config.referenceText) {
     lines.push("", "Reference answer/style guide:", config.referenceText);
@@ -132,7 +160,7 @@ function buildPostprocessPrompt({
   lines.push(
     "",
     "Tasks:",
-    "- Resolve conflicts between the two OCR outputs.",
+    "- Resolve conflicts between the selected OCR outputs when multiple sources are provided.",
     "- Correct obvious OCR mistakes.",
     "- Normalize formatting, list markers, and line breaks.",
     "- Reconstruct tables or item structures in readable text.",

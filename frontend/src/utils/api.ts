@@ -2,6 +2,7 @@ import axios from "axios";
 
 import type {
   HistoryRecord,
+  OpendataloaderConfig,
   PostprocessConfig,
   PresetRecord,
   StageResponse,
@@ -27,6 +28,17 @@ export async function runUpstageApi(file: File, config: UpstageConfig): Promise<
   return unwrap<{ file: FileMeta } & StageResponse>(response);
 }
 
+export async function runOpenDataLoaderApi(
+  file: File,
+  config: OpendataloaderConfig
+): Promise<StageResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("config", JSON.stringify(config));
+  const response = await api.post("/ocr/opendataloader", formData);
+  return unwrap<{ file: FileMeta } & StageResponse>(response);
+}
+
 export async function testUpstageCallApi(config: UpstageConfig): Promise<unknown> {
   const response = await api.post("/ocr/upstage/test-call", config);
   return unwrap(response);
@@ -47,8 +59,9 @@ export async function testVisionCallApi(config: VisionModelConfig): Promise<unkn
 
 export async function runPostprocessApi(payload: {
   file: FileMeta;
-  upstageResult: StageResponse;
-  visionResult: StageResponse;
+  opendataloaderResult?: StageResponse | null;
+  upstageResult?: StageResponse | null;
+  visionResult?: StageResponse | null;
   config: PostprocessConfig;
 }): Promise<StageResponse> {
   const response = await api.post("/postprocess", payload);
@@ -67,8 +80,9 @@ export async function runAllApi(
   config: StoredConfigBundle
 ): Promise<{
   file: FileMeta;
-  upstage: StageResponse;
-  vision: StageResponse;
+  opendataloader: StageResponse | null;
+  upstage: StageResponse | null;
+  vision: StageResponse | null;
   postprocess: StageResponse;
 }> {
   const formData = new FormData();

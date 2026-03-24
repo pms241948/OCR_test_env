@@ -5,6 +5,7 @@ const { asyncHandler } = require("../utils/errors");
 const {
   health,
   runUpstage,
+  runOpenDataLoader,
   runVisionLlm,
   testUpstageCall,
   testVisionCall,
@@ -25,6 +26,7 @@ const apiRouter = express.Router();
 
 apiRouter.get("/health", asyncHandler(health));
 apiRouter.post("/ocr/upstage", uploadSingle, asyncHandler(runUpstage));
+apiRouter.post("/ocr/opendataloader", uploadSingle, asyncHandler(runOpenDataLoader));
 apiRouter.post("/ocr/vision-llm", uploadSingle, asyncHandler(runVisionLlm));
 apiRouter.post("/ocr/upstage/test-call", asyncHandler(testUpstageCall));
 apiRouter.post("/ocr/vision-llm/test-call", asyncHandler(testVisionCall));

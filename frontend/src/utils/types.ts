@@ -39,6 +39,16 @@ export type UpstageConfig = {
   retryCount: number;
 };
 
+export type OpendataloaderOutputFormat = "json" | "text" | "html" | "markdown";
+
+export type OpendataloaderConfig = {
+  outputFormats: OpendataloaderOutputFormat[];
+  keepLineBreaks: boolean;
+  useStructTree: boolean;
+  contentSafetyOff: string;
+  replaceInvalidChars: string;
+};
+
 export type LlmBaseConfig = {
   url: string;
   apiKey: string;
@@ -76,9 +86,14 @@ export type VisionRegistry = {
   models: VisionModelConfig[];
 };
 
-export type PostprocessConfig = LlmBaseConfig;
+export type PostprocessConfig = LlmBaseConfig & {
+  includeOpendataloader: boolean;
+  includeUpstage: boolean;
+  includeVision: boolean;
+};
 
 export type StoredConfigBundle = {
+  opendataloader: OpendataloaderConfig;
   upstage: UpstageConfig;
   vision: VisionRegistry;
   postprocess: PostprocessConfig;
@@ -119,6 +134,7 @@ export type StageResponse = {
   };
   text?: string;
   raw?: unknown;
+  downloads?: DownloadableResultFile[];
   usedPrompt?: {
     systemPrompt?: string;
     userPrompt?: string;
@@ -138,6 +154,14 @@ export type StageResponse = {
   pageCount?: number | null;
 };
 
+export type DownloadableResultFile = {
+  key: string;
+  label: string;
+  fileName: string;
+  mimeType: string;
+  content: string;
+};
+
 export type VisionModelResult = StageResponse & {
   modelId: string;
   modelLabel: string;
@@ -145,4 +169,4 @@ export type VisionModelResult = StageResponse & {
   errorMessage?: string;
 };
 
-export type StageKey = "upstage" | "vision" | "postprocess" | "pipeline";
+export type StageKey = "opendataloader" | "upstage" | "vision" | "postprocess" | "pipeline";

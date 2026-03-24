@@ -1,8 +1,30 @@
-# 폐쇄망 서버 Docker 교체 가이드
+# Closed-Net Docker Upgrade Guide
 
-이 문서는 기존 `ocr-backend`, `ocr-frontend` 컨테이너를 새 버전 이미지로 교체하는 절차를 정리합니다.
+This document describes how to upgrade an existing closed-network deployment by replacing only the Docker images and recreating the containers.
 
-기준 운영 명령:
+The current application keeps user data outside the containers:
+
+- `/app/ocrlab/data`
+- `/app/ocrlab/uploads`
+
+As long as you keep mounting those same host paths, you can upgrade by replacing the images and recreating the containers.
+
+## What Changes In This Release
+
+- Backend image now includes the OpenDataLoader PDF parser.
+- Backend image now includes a Java runtime required by OpenDataLoader.
+- No new environment variables are required for this release.
+- No manual database migration is required for this release.
+
+That means the upgrade is still image-based:
+
+1. Build and export new images on a connected machine.
+2. Transfer the tar file to the closed network.
+3. Load the new images.
+4. Stop and remove the old containers.
+5. Start new containers with the same mounts and env file.
+
+## Existing Runtime Example
 
 ```bash
 docker run -d \
@@ -24,92 +46,102 @@ docker run -d \
   ocr-compare-frontend:1.0
 ```
 
-## 전제
+## 1. Build New Images On A Connected Machine
 
-- 기존 데이터는 호스트 경로에 유지됩니다.
-  - `/app/ocrlab/data`
-  - `/app/ocrlab/uploads`
-- 새 버전 이미지는 예시로 아래 태그를 사용합니다.
-  - `ocr-compare-backend:1.1`
-  - `ocr-compare-frontend:1.1`
-- 운영 중단 시간을 줄이려면 새 이미지를 먼저 `docker load`까지 완료한 뒤 교체합니다.
-
-## 1. 외부망 빌드 서버에서 새 이미지 준비
-
-프로젝트 루트에서 실행:
+Run from the project root:
 
 ```bash
-docker build -t ocr-compare-backend:1.1 ./backend
-docker build -t ocr-compare-frontend:1.1 ./frontend
+docker build -t ocr-compare-backend:<version> ./backend
+docker build -t ocr-compare-frontend:<version> ./frontend
 ```
 
-이미지 확인:
+Example:
+
+```bash
+docker build -t ocr-compare-backend:1.3.0 ./backend
+docker build -t ocr-compare-frontend:1.3.0 ./frontend
+```
+
+Check the built images:
 
 ```bash
 docker images | grep ocr-compare
 ```
 
-반입용 tar 생성:
+## 2. Export The Images
 
 ```bash
-docker save -o ocr-compare-1.1.tar \
-  ocr-compare-backend:1.1 \
-  ocr-compare-frontend:1.1
+docker save -o ocr-compare-<version>.tar \
+  ocr-compare-backend:<version> \
+  ocr-compare-frontend:<version>
 ```
 
-폐쇄망 서버로 아래 파일을 전달합니다.
+Example:
 
-- `ocr-compare-1.1.tar`
-- 필요 시 최신 `.env`
+```bash
+docker save -o ocr-compare-1.3.0.tar \
+  ocr-compare-backend:1.3.0 \
+  ocr-compare-frontend:1.3.0
+```
 
-## 2. 폐쇄망 서버에서 사전 확인
+Transfer these files to the closed-network server:
 
-네트워크 확인:
+- `ocr-compare-<version>.tar`
+- updated `.env` if you changed it
+
+## 3. Pre-Check On The Closed-Network Server
+
+Make sure the Docker network exists:
 
 ```bash
 docker network inspect ocr-net >/dev/null 2>&1 || docker network create ocr-net
 ```
 
-현재 컨테이너 상태 확인:
+Check current containers:
 
 ```bash
 docker ps -a --filter name=ocr-backend --filter name=ocr-frontend
 ```
 
-현재 이미지 확인:
-
-```bash
-docker image inspect ocr-compare-backend:1.0 >/dev/null
-docker image inspect ocr-compare-frontend:1.0 >/dev/null
-```
-
-## 3. 새 이미지 반입
-
-```bash
-docker load -i ocr-compare-1.1.tar
-```
-
-반입 확인:
+Check current images if needed:
 
 ```bash
 docker images | grep ocr-compare
 ```
 
-## 4. 운영 중 교체 절차
+## 4. Load The New Images
 
-기존 컨테이너 중지:
+```bash
+docker load -i ocr-compare-<version>.tar
+```
+
+Example:
+
+```bash
+docker load -i ocr-compare-1.3.0.tar
+```
+
+Confirm the new tags:
+
+```bash
+docker images | grep ocr-compare
+```
+
+## 5. Replace The Running Containers
+
+Stop the old containers:
 
 ```bash
 docker stop ocr-frontend ocr-backend
 ```
 
-기존 컨테이너 삭제:
+Remove the old containers:
 
 ```bash
 docker rm ocr-frontend ocr-backend
 ```
 
-백엔드 새 버전 실행:
+Start the new backend container:
 
 ```bash
 docker run -d \
@@ -121,10 +153,10 @@ docker run -d \
   -v /app/ocrlab/data:/app/data \
   -v /app/ocrlab/uploads:/app/uploads \
   -p 8081:3001 \
-  ocr-compare-backend:1.1
+  ocr-compare-backend:<version>
 ```
 
-프론트엔드 새 버전 실행:
+Start the new frontend container:
 
 ```bash
 docker run -d \
@@ -132,61 +164,91 @@ docker run -d \
   --restart=always \
   --network ocr-net \
   -p 8082:80 \
-  ocr-compare-frontend:1.1
+  ocr-compare-frontend:<version>
 ```
 
-## 5. 기동 확인
+Example:
 
-컨테이너 상태:
+```bash
+docker run -d \
+  --name ocr-backend \
+  --restart=always \
+  --network ocr-net \
+  --network-alias backend \
+  --env-file /app/ocrlab/deploy/.env \
+  -v /app/ocrlab/data:/app/data \
+  -v /app/ocrlab/uploads:/app/uploads \
+  -p 8081:3001 \
+  ocr-compare-backend:1.3.0
+
+docker run -d \
+  --name ocr-frontend \
+  --restart=always \
+  --network ocr-net \
+  -p 8082:80 \
+  ocr-compare-frontend:1.3.0
+```
+
+## 6. Validate The Upgrade
+
+Check container status:
 
 ```bash
 docker ps --filter name=ocr-backend --filter name=ocr-frontend
 ```
 
-백엔드 헬스체크:
+Check backend health:
 
 ```bash
 curl http://localhost:8081/api/health
 ```
 
-프론트엔드 응답 확인:
+Check frontend response:
 
 ```bash
 curl -I http://localhost:8082
 ```
 
-로그 확인:
+Check logs:
 
 ```bash
 docker logs --tail 100 ocr-backend
 docker logs --tail 100 ocr-frontend
 ```
 
-## 6. 애플리케이션 기능 확인
+## 7. Functional Checks For This Release
 
-브라우저에서 `http://<서버IP>:8082` 접속 후 아래를 확인합니다.
+After opening `http://<server-ip>:8082`, verify these flows:
 
-1. 메인 페이지 로드
-2. `Vision OCR` 단독 호출
-3. `Upstage DP` 단독 호출
-4. 필요 시 `Postprocess` 호출
+1. Main page loads normally.
+2. `Upstage DP` still runs successfully.
+3. `Vision OCR` still runs successfully.
+4. `Postprocess LLM` still runs successfully.
+5. `OpenDataLoader PDF` tab is visible.
+6. Upload a PDF and run `OpenDataLoader`.
+7. Confirm the OpenDataLoader result is visible in the results workspace.
+8. Confirm result download buttons work for Markdown, HTML, Text, or JSON.
+9. Confirm `Postprocess LLM` can be configured to include or exclude:
+   - OpenDataLoader
+   - Upstage
+   - Vision
 
-이번 버전에서 특히 확인할 항목:
+Notes for this release:
 
-- Vision LLM 장시간 응답 시 60초 전에 끊기지 않는지
-- Upstage DP 호출 시 `model=document-parse`가 포함되어 정상 응답하는지
-- Upstage DP 호출 시 `output_formats`가 JSON 문자열 형식으로 전달되어 400이 사라졌는지
+- OpenDataLoader runs inside the backend container.
+- No host-level Java installation is needed if you use the updated backend image.
+- OpenDataLoader currently supports PDF uploads only in this app.
 
-## 7. 롤백 방법
+## 8. Rollback
 
-새 버전 장애 시:
+If the new version must be rolled back:
 
 ```bash
 docker stop ocr-frontend ocr-backend
 docker rm ocr-frontend ocr-backend
 ```
 
-기존 버전으로 재기동:
+Then start the previous version again:
 
 ```bash
 docker run -d \
@@ -198,27 +260,20 @@ docker run -d \
   -v /app/ocrlab/data:/app/data \
   -v /app/ocrlab/uploads:/app/uploads \
   -p 8081:3001 \
-  ocr-compare-backend:1.0
+  ocr-compare-backend:<previous-version>
 
 docker run -d \
   --name ocr-frontend \
   --restart=always \
   --network ocr-net \
   -p 8082:80 \
-  ocr-compare-frontend:1.0
+  ocr-compare-frontend:<previous-version>
 ```
 
-## 8. 운영 팁
-
-- 가능하면 기존 `1.0` 이미지는 바로 삭제하지 말고 롤백 확인 전까지 유지합니다.
-- 태그를 덮어쓰기보다 `1.1`, `1.2`처럼 새 태그를 쓰는 것이 안전합니다.
-- 데이터는 볼륨이 아니라 호스트 경로 마운트이므로 컨테이너 재생성으로 사라지지 않습니다.
-- `.env`를 변경했다면 백엔드 컨테이너는 반드시 재생성해야 반영됩니다.
-
-## 9. 빠른 교체 명령 요약
+## 9. Quick Upgrade Summary
 
 ```bash
-docker load -i ocr-compare-1.1.tar
+docker load -i ocr-compare-<version>.tar
 
 docker stop ocr-frontend ocr-backend
 docker rm ocr-frontend ocr-backend
@@ -232,14 +287,14 @@ docker run -d \
   -v /app/ocrlab/data:/app/data \
   -v /app/ocrlab/uploads:/app/uploads \
   -p 8081:3001 \
-  ocr-compare-backend:1.1
+  ocr-compare-backend:<version>
 
 docker run -d \
   --name ocr-frontend \
   --restart=always \
   --network ocr-net \
   -p 8082:80 \
-  ocr-compare-frontend:1.1
+  ocr-compare-frontend:<version>
 
 curl http://localhost:8081/api/health
 curl -I http://localhost:8082

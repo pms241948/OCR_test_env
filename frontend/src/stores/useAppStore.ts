@@ -5,6 +5,7 @@ import type { AppLanguage } from "../utils/i18n";
 import type {
   FileMeta,
   HistoryRecord,
+  OpendataloaderConfig,
   PostprocessConfig,
   PresetRecord,
   StageResponse,
@@ -106,6 +107,14 @@ const defaultUpstageConfig: UpstageConfig = {
   retryCount: 1,
 };
 
+const defaultOpendataloaderConfig: OpendataloaderConfig = {
+  outputFormats: ["json", "markdown", "html"],
+  keepLineBreaks: false,
+  useStructTree: false,
+  contentSafetyOff: "",
+  replaceInvalidChars: "",
+};
+
 const defaultVisionConfig: VisionConfig = {
   url: "",
   apiKey: "",
@@ -153,6 +162,9 @@ const defaultPostprocessConfig: PostprocessConfig = {
   retryCount: 1,
   referenceEnabled: false,
   referenceText: "",
+  includeOpendataloader: false,
+  includeUpstage: true,
+  includeVision: true,
 };
 
 function createVisionModelId(): string {
@@ -279,17 +291,20 @@ function syncVisionResultsWithRegistry(
 
 type AppStore = {
   language: AppLanguage;
+  opendataloaderConfig: OpendataloaderConfig;
   upstageConfig: UpstageConfig;
   visionRegistry: VisionRegistry;
   postprocessConfig: PostprocessConfig;
   fileMeta: FileMeta | null;
   results: {
+    opendataloader: StageResponse | null;
     upstage: StageResponse | null;
     vision: Record<string, VisionModelResult | null>;
     postprocess: StageResponse | null;
   };
   presets: PresetRecord[];
   history: HistoryRecord[];
+  updateOpendataloaderConfig: (patch: Partial<OpendataloaderConfig>) => void;
   updateUpstageConfig: (patch: Partial<UpstageConfig>) => void;
   setVisionRegistry: (visionRegistry: VisionRegistry) => void;
   updateVisionModel: (modelId: string, patch: Partial<VisionModelConfig>) => void;
@@ -299,7 +314,10 @@ type AppStore = {
   setActiveVisionModel: (modelId: string) => void;
   updatePostprocessConfig: (patch: Partial<PostprocessConfig>) => void;
   setFileMeta: (fileMeta: FileMeta | null) => void;
-  setStageResult: (stage: "upstage" | "postprocess", result: StageResponse | null) => void;
+  setStageResult: (
+    stage: "opendataloader" | "upstage" | "postprocess",
+    result: StageResponse | null
+  ) => void;
   setVisionResult: (modelId: string, result: VisionModelResult | null) => void;
   setVisionResults: (results: Record<string, VisionModelResult | null>) => void;
   resetResults: () => void;
@@ -314,17 +332,26 @@ export const useAppStore = create<AppStore>()(
   persist(
     (set) => ({
       language: "en",
+      opendataloaderConfig: defaultOpendataloaderConfig,
       upstageConfig: defaultUpstageConfig,
       visionRegistry: createDefaultVisionRegistry(),
       postprocessConfig: defaultPostprocessConfig,
       fileMeta: null,
       results: {
+        opendataloader: null,
         upstage: null,
         vision: {},
         postprocess: null,
       },
       presets: [],
       history: [],
+      updateOpendataloaderConfig: (patch) =>
+        set((state) => ({
+          opendataloaderConfig: {
+            ...state.opendataloaderConfig,
+            ...patch,
+          },
+        })),
       updateUpstageConfig: (patch) =>
         set((state) => ({
           upstageConfig: {
@@ -470,6 +497,7 @@ export const useAppStore = create<AppStore>()(
       resetResults: () =>
         set({
           results: {
+            opendataloader: null,
             upstage: null,
             vision: {},
             postprocess: null,
@@ -480,6 +508,10 @@ export const useAppStore = create<AppStore>()(
       applyConfigBundle: (config) => {
         const normalizedVision = normalizeVisionRegistry(config.vision);
         set((state) => ({
+          opendataloaderConfig: {
+            ...defaultOpendataloaderConfig,
+            ...config.opendataloader,
+          },
           upstageConfig: {
             ...defaultUpstageConfig,
             ...config.upstage,
@@ -497,6 +529,7 @@ export const useAppStore = create<AppStore>()(
       },
       resetConfigs: () =>
         set({
+          opendataloaderConfig: defaultOpendataloaderConfig,
           upstageConfig: defaultUpstageConfig,
           visionRegistry: createDefaultVisionRegistry(),
           postprocessConfig: defaultPostprocessConfig,
@@ -509,6 +542,7 @@ export const useAppStore = create<AppStore>()(
       partialize: (state) =>
         sanitizePersistedConfig({
           language: state.language,
+          opendataloaderConfig: state.opendataloaderConfig,
           upstageConfig: state.upstageConfig,
           visionRegistry: state.visionRegistry,
           postprocessConfig: state.postprocessConfig,
@@ -524,6 +558,10 @@ export const useAppStore = create<AppStore>()(
         return {
           ...currentState,
           ...safeState,
+          opendataloaderConfig: {
+            ...defaultOpendataloaderConfig,
+            ...(safeState.opendataloaderConfig || currentState.opendataloaderConfig),
+          },
           upstageConfig: {
             ...defaultUpstageConfig,
             ...(safeState.upstageConfig || currentState.upstageConfig),
@@ -544,6 +582,7 @@ export const useAppStore = create<AppStore>()(
 );
 
 export const defaults = {
+  opendataloader: defaultOpendataloaderConfig,
   upstage: defaultUpstageConfig,
   vision: defaultVisionConfig,
   visionRegistry: createDefaultVisionRegistry(),

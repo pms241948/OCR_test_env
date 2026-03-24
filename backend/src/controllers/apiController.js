@@ -7,22 +7,26 @@ const {
   listPresetRecords,
   updatePresetRecord,
 } = require("../db/database");
-const { AppError } = require("../utils/errors");
-const { cleanupUploadedFile, getDocumentMetadata, sha256File } = require("../utils/file");
-const { parseJsonField } = require("../utils/parsing");
-const { sanitizeConfigForStorage } = require("../utils/storageSanitizer");
+const { runOpenDataLoaderPdf } = require("../services/opendataloaderService");
+const { runFullPipeline } = require("../services/pipelineService");
+const {
+  runPostprocessLlm,
+  testPostprocessConnection,
+} = require("../services/postprocessService");
 const {
   checkEndpoints,
   runUpstageDocumentParse,
   testUpstageConnection,
 } = require("../services/upstageService");
 const { runVisionOcr, testVisionConnection } = require("../services/visionLlmService");
-const { runPostprocessLlm, testPostprocessConnection } = require("../services/postprocessService");
-const { runFullPipeline } = require("../services/pipelineService");
+const { AppError } = require("../utils/errors");
+const { cleanupUploadedFile, getDocumentMetadata, sha256File } = require("../utils/file");
+const { parseJsonField } = require("../utils/parsing");
+const { sanitizeConfigForStorage } = require("../utils/storageSanitizer");
 
 function requireFile(file) {
   if (!file) {
-    throw new AppError("업로드 파일이 필요합니다.", 400);
+    throw new AppError("An uploaded file is required.", 400);
   }
 }
 
@@ -48,14 +52,7 @@ async function buildFileContext(file) {
   };
 }
 
-async function persistRun({
-  runType,
-  file,
-  fileContext,
-  config,
-  roi,
-  result,
-}) {
+async function persistRun({ runType, file, fileContext, config, roi, result }) {
   return addHistoryEntry({
     runType,
     fileName: fileContext?.metadata?.fileName || file?.originalname || null,
@@ -94,6 +91,41 @@ async function runUpstage(req, res) {
 
     const historyId = await persistRun({
       runType: "upstage",
+      file: req.file,
+      fileContext,
+      config,
+      roi: null,
+      result,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        historyId,
+        file: fileContext.metadata,
+        ...result,
+      },
+    });
+  } finally {
+    await cleanupUploadedFile(req.file?.path);
+  }
+}
+
+async function runOpenDataLoader(req, res) {
+  requireFile(req.file);
+  const config = getMultipartConfig(req);
+
+  let fileContext;
+  try {
+    fileContext = await buildFileContext(req.file);
+    const result = await runOpenDataLoaderPdf({
+      file: req.file,
+      fileMetadata: fileContext.metadata,
+      config,
+    });
+
+    const historyId = await persistRun({
+      runType: "opendataloader",
       file: req.file,
       fileContext,
       config,
@@ -182,18 +214,12 @@ async function runPostprocess(req, res) {
   const body = req.body || {};
   const config = body.config || {};
   const file = body.file || {};
-  const upstageResult = body.upstageResult;
-  const visionResult = body.visionResult;
-
-  if (!upstageResult || !visionResult) {
-    throw new AppError("후처리에는 Upstage 결과와 Vision 결과가 모두 필요합니다.", 400);
-  }
-
   const result = await runPostprocessLlm({
     config,
     fileMetadata: file,
-    upstageResult,
-    visionResult,
+    opendataloaderResult: body.opendataloaderResult,
+    upstageResult: body.upstageResult,
+    visionResult: body.visionResult,
   });
 
   const historyId = await addHistoryEntry({
@@ -204,7 +230,7 @@ async function runPostprocess(req, res) {
     fileSize: file.fileSize || null,
     filePages: file.pageCount || null,
     config: sanitizeConfigForStorage(config),
-    roi: visionResult?.range?.roi || null,
+    roi: body.visionResult?.range?.roi || null,
     result,
   });
 
@@ -278,8 +304,7 @@ async function checkUpstageEndpoints(req, res) {
 }
 
 async function listHistory(req, res) {
-  const limit =
-    typeof req.query.limit === "undefined" ? null : Number(req.query.limit);
+  const limit = typeof req.query.limit === "undefined" ? null : Number(req.query.limit);
 
   if (limit !== null && (!Number.isFinite(limit) || limit < 1)) {
     throw new AppError("History limit must be a positive number.", 400);
@@ -344,7 +369,7 @@ async function createPreset(req, res) {
   const body = req.body || {};
 
   if (!body.name) {
-    throw new AppError("프리셋 이름이 필요합니다.", 400);
+    throw new AppError("Preset name is required.", 400);
   }
 
   const id = createPresetRecord({
@@ -364,7 +389,7 @@ async function updatePreset(req, res) {
   const body = req.body || {};
 
   if (!id) {
-    throw new AppError("유효한 프리셋 ID가 필요합니다.", 400);
+    throw new AppError("A valid preset ID is required.", 400);
   }
 
   updatePresetRecord(id, {
@@ -383,7 +408,7 @@ async function deletePreset(req, res) {
   const id = Number(req.params.id);
 
   if (!id) {
-    throw new AppError("유효한 프리셋 ID가 필요합니다.", 400);
+    throw new AppError("A valid preset ID is required.", 400);
   }
 
   deletePresetRecord(id);
@@ -397,6 +422,7 @@ async function deletePreset(req, res) {
 module.exports = {
   health,
   runUpstage,
+  runOpenDataLoader,
   runVisionLlm,
   testUpstageCall,
   testVisionCall,

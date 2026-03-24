@@ -8,6 +8,7 @@
     "start": "node src/index.js"
   },
   "dependencies": {
+    "@opendataloader/pdf": "^1.0.3",
     "axios": "^1.8.4",
     "better-sqlite3": "^11.9.1",
     "cors": "^2.8.5",

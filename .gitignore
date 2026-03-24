@@ -6,6 +6,9 @@ backend/uploads/*
 frontend/dist/
 frontend/node_modules/
 backend/node_modules/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 .env
 *.log

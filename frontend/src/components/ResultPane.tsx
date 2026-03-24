@@ -1,6 +1,7 @@
 import { useAppStore } from "../stores/useAppStore";
-import { downloadText } from "../utils/file";
+import { downloadBlob, downloadText } from "../utils/file";
 import { translate } from "../utils/i18n";
+import type { DownloadableResultFile } from "../utils/types";
 import { JsonViewer } from "./JsonViewer";
 
 type ResultPaneProps = {
@@ -15,6 +16,7 @@ type ResultPaneProps = {
   textareaClassName?: string;
   contentClassName?: string;
   rawDefaultOpen?: boolean;
+  downloads?: DownloadableResultFile[];
 };
 
 function cn(...values: Array<string | undefined>): string {
@@ -33,6 +35,7 @@ export function ResultPane({
   textareaClassName,
   contentClassName,
   rawDefaultOpen = false,
+  downloads = [],
 }: ResultPaneProps) {
   const value = text || "";
   const language = useAppStore((state) => state.language);
@@ -61,14 +64,27 @@ export function ResultPane({
           >
             {t("button.copy")}
           </button>
-          <button
-            type="button"
-            className="rounded-full border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 transition hover:border-coral hover:text-coral"
-            onClick={() => downloadText(`${title}.txt`, value)}
-            disabled={!value}
-          >
-            {t("button.download")}
-          </button>
+          {downloads.length === 0 ? (
+            <button
+              type="button"
+              className="rounded-full border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 transition hover:border-coral hover:text-coral"
+              onClick={() => downloadText(`${title}.txt`, value)}
+              disabled={!value}
+            >
+              {t("button.download")}
+            </button>
+          ) : null}
+          {downloads.map((download) => (
+            <button
+              key={download.key}
+              type="button"
+              className="rounded-full border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 transition hover:border-coral hover:text-coral"
+              onClick={() => downloadBlob(download.fileName, download.content, download.mimeType)}
+              disabled={!download.content}
+            >
+              {download.label}
+            </button>
+          ))}
         </div>
       </div>
 

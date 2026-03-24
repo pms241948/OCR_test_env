@@ -1,27 +1,32 @@
-# Image Build Guide
+# Docker Image Build Guide
 
-## Overview
+This document explains how to build, tag, export, and run the Docker images for this project.
 
-This project builds two Docker images.
-
-- `ocr_test_env-backend`
-- `ocr_test_env-frontend`
-
-The commands below should be run from the project root:
+Project root:
 
 ```powershell
 C:\Users\pms24\Desktop\OCR_test_env
 ```
 
+## Images Produced
+
+- `ocr_test_env-backend`
+- `ocr_test_env-frontend`
+
+For release delivery, tag them as:
+
+- `ocr-compare-backend:<version>`
+- `ocr-compare-frontend:<version>`
+
 ## 1. Build And Run With Docker Compose
 
-Build both images and start the containers:
+Build both services and start them:
 
 ```powershell
 docker compose up -d --build
 ```
 
-Check running containers:
+Check the running services:
 
 ```powershell
 docker compose ps
@@ -34,7 +39,7 @@ Check the app:
 
 ## 2. Build Images Only
 
-If you only want the images without starting containers:
+Build without starting containers:
 
 ```powershell
 docker compose build
@@ -47,19 +52,26 @@ docker build -t ocr_test_env-backend ./backend
 docker build -t ocr_test_env-frontend ./frontend
 ```
 
-Check built images:
+Check the local images:
 
 ```powershell
 docker images
 ```
 
-## 3. Add Version Tags
+## 3. Tag Release Images
 
-If you want versioned image names for delivery or release:
+Example release tag:
 
 ```powershell
-docker image tag ocr_test_env-backend ocr-compare-backend:1.2.0
-docker image tag ocr_test_env-frontend ocr-compare-frontend:1.2.0
+docker image tag ocr_test_env-backend ocr-compare-backend:1.3.0
+docker image tag ocr_test_env-frontend ocr-compare-frontend:1.3.0
+```
+
+Generic form:
+
+```powershell
+docker image tag ocr_test_env-backend ocr-compare-backend:<version>
+docker image tag ocr_test_env-frontend ocr-compare-frontend:<version>
 ```
 
 Check the tags:
@@ -70,13 +82,19 @@ docker images | findstr ocr
 
 ## 4. Export Images To A Tar File
 
-Save both images into one archive:
+Save the tagged release images:
 
 ```powershell
-docker save -o ocr-compare-images-v1.2.0.tar ocr-compare-backend:1.2.0 ocr-compare-frontend:1.2.0
+docker save -o ocr-compare-images-v1.3.0.tar ocr-compare-backend:1.3.0 ocr-compare-frontend:1.3.0
 ```
 
-If you are not using version tags, you can save the compose-built images directly:
+Generic form:
+
+```powershell
+docker save -o ocr-compare-images-v<version>.tar ocr-compare-backend:<version> ocr-compare-frontend:<version>
+```
+
+If you want to save the compose-built image names directly:
 
 ```powershell
 docker save -o ocr-test-env-images.tar ocr_test_env-backend ocr_test_env-frontend
@@ -84,10 +102,10 @@ docker save -o ocr-test-env-images.tar ocr_test_env-backend ocr_test_env-fronten
 
 ## 5. Load Images On Another Machine
 
-Load the tar file:
+Load the archive:
 
 ```powershell
-docker load -i ocr-compare-images-v1.2.0.tar
+docker load -i ocr-compare-images-v1.3.0.tar
 ```
 
 Check loaded images:
@@ -101,16 +119,56 @@ docker images | findstr ocr
 Backend:
 
 ```powershell
-docker run -d --name ocr-backend -p 3001:3001 --env-file .env -v ocr_backend_data:/app/data -v ocr_backend_uploads:/app/uploads ocr-compare-backend:1.2.0
+docker run -d --name ocr-backend -p 3001:3001 --env-file .env -v ocr_backend_data:/app/data -v ocr_backend_uploads:/app/uploads ocr-compare-backend:1.3.0
 ```
 
 Frontend:
 
 ```powershell
-docker run -d --name ocr-frontend -p 8080:80 ocr-compare-frontend:1.2.0
+docker run -d --name ocr-frontend -p 8080:80 ocr-compare-frontend:1.3.0
 ```
 
-## 7. Useful Cleanup Commands
+## 7. Release Notes For The Current Backend Image
+
+The current backend image includes:
+
+- OpenDataLoader PDF support
+- Java runtime required by OpenDataLoader
+- existing Upstage, Vision OCR, and Postprocess APIs
+
+That means:
+
+- you do not need to install Java on the host when using the Docker image
+- OpenDataLoader works inside the backend container
+- closed-network upgrades still work by replacing only the Docker images and recreating containers
+
+## 8. Recommended Release Flow
+
+1. Build and verify locally.
+
+```powershell
+docker compose up -d --build
+docker compose ps
+```
+
+2. Tag the release images.
+
+```powershell
+docker image tag ocr_test_env-backend ocr-compare-backend:<version>
+docker image tag ocr_test_env-frontend ocr-compare-frontend:<version>
+```
+
+3. Save the tagged images.
+
+```powershell
+docker save -o ocr-compare-images-v<version>.tar ocr-compare-backend:<version> ocr-compare-frontend:<version>
+```
+
+4. Transfer the tar file to the target environment.
+
+5. Load and run the images on the target machine.
+
+## 9. Useful Cleanup Commands
 
 Stop compose services:
 
@@ -129,30 +187,3 @@ Remove standalone containers:
 ```powershell
 docker rm -f ocr-backend ocr-frontend
 ```
-
-## 8. Recommended Release Flow
-
-1. Build and verify locally.
-
-```powershell
-docker compose up -d --build
-docker compose ps
-```
-
-2. Tag release images.
-
-```powershell
-docker image tag ocr_test_env-backend ocr-compare-backend:1.2.0
-docker image tag ocr_test_env-frontend ocr-compare-frontend:1.2.0
-```
-
-3. Save the tagged images.
-
-```powershell
-docker save -o ocr-compare-images-v1.2.0.tar ocr-compare-backend:1.2.0 ocr-compare-frontend:1.2.0
-```
-
-4. Transfer the tar file and load it on the target machine.
-
-5. Run with `docker compose` or `docker run`.
-

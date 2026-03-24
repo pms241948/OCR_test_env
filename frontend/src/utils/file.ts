@@ -95,14 +95,18 @@ export async function readTextFile(file: File): Promise<string> {
   return file.text();
 }
 
-export function downloadText(filename: string, text: string): void {
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+export function downloadBlob(filename: string, content: BlobPart, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+export function downloadText(filename: string, text: string): void {
+  downloadBlob(filename, text, "text/plain;charset=utf-8");
 }
 
 export async function getImageDimensions(file: File): Promise<{ width: number; height: number }> {

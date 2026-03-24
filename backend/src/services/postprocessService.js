@@ -8,22 +8,55 @@ const {
 } = require("../utils/prompt");
 const { normalizeOpenAiChatUrl, validateTargetUrl } = require("../utils/urlValidator");
 
+function resolvePostprocessSourceSelection(config = {}) {
+  return {
+    opendataloader: config.includeOpendataloader === true,
+    upstage: config.includeUpstage !== false,
+    vision: config.includeVision !== false,
+  };
+}
+
+function validateSelectedSources(sourceSelection, sources) {
+  const enabledSources = Object.entries(sourceSelection)
+    .filter(([, enabled]) => enabled)
+    .map(([key]) => key);
+
+  if (!enabledSources.length) {
+    throw new AppError("At least one OCR result must be selected for postprocess.", 400);
+  }
+
+  const missingSources = enabledSources.filter((key) => !sources[key]);
+  if (missingSources.length > 0) {
+    throw new AppError("Selected OCR results are missing for postprocess.", 400, {
+      sources: missingSources,
+    });
+  }
+}
+
 async function runPostprocessLlm({
   config,
   fileMetadata,
+  opendataloaderResult,
   upstageResult,
   visionResult,
 }) {
   const url = normalizeOpenAiChatUrl(config.url);
   const useHardcodedPrompts = config.useHardcodedPrompts !== false;
+  const sourceSelection = resolvePostprocessSourceSelection(config);
 
   if (!url) {
-    throw new AppError("후처리 LLM 호출 URL이 필요합니다.", 400);
+    throw new AppError("?꾩쿂由?LLM ?몄텧 URL???꾩슂?⑸땲??", 400);
   }
 
   if (!config.model) {
-    throw new AppError("후처리 LLM 모델명이 필요합니다.", 400);
+    throw new AppError("?꾩쿂由?LLM 紐⑤뜽紐낆씠 ?꾩슂?⑸땲??", 400);
   }
+
+  validateSelectedSources(sourceSelection, {
+    opendataloader: opendataloaderResult,
+    upstage: upstageResult,
+    vision: visionResult,
+  });
 
   await validateTargetUrl(url);
 
@@ -38,8 +71,10 @@ async function runPostprocessLlm({
   const compiledPrompt = buildPostprocessPrompt({
     fileMetadata,
     config,
+    opendataloaderResult,
     upstageResult,
     visionResult,
+    sourceSelection,
     useHardcodedPrompts,
   });
   const messages = [];
@@ -91,6 +126,7 @@ async function runPostprocessLlm({
     request: {
       url,
       payload,
+      sourceSelection,
     },
     usedPrompt: {
       systemPrompt: effectiveSystemPrompt,
@@ -171,6 +207,7 @@ async function testPostprocessConnection(config) {
 }
 
 module.exports = {
+  resolvePostprocessSourceSelection,
   runPostprocessLlm,
   testPostprocessConnection,
 };
